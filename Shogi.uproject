@@ -30,6 +30,10 @@
 		{
 			"Name": "MetaHumanSDK",
 			"Enabled": false
+		},
+		{
+			"Name": "BlueprintScreenshotTool",
+			"Enabled": true
 		}
 	]
 }

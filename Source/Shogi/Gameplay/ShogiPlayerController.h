@@ -35,7 +35,8 @@ public:
 	/**
 	 * Hot-seat / local pass-and-play mode: when true, this controller can select and
 	 * move pieces for whichever side's turn it currently is (see GetControllableSide),
-	 * ignoring PlayerSide. Set by AShogiSinglePlayerHotSeatGameMode.
+	 * ignoring PlayerSide. Set by AShogiGameMode::PostLogin when running NM_Standalone
+	 * (Main opened directly), and unconditionally by AShogiSinglePlayerHotSeatGameMode.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
 	bool bControlBothSides = false;

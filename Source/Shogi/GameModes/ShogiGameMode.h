@@ -13,6 +13,15 @@ class AShogiPlayerController;
  * Assigns the first connecting player to Sente and the second to Gote. Behavior for
  * a 3rd+ connecting player was not confirmed in the original Blueprint (see
  * docs/GameSpec.md) - they are simply left at PlayerSide::None (spectator) here.
+ *
+ * Mode auto-detection: this is the single GameMode assigned to Content/Map/Main.umap's
+ * World Settings, used for both single-player and online play - which one happens is
+ * decided by NetMode, not by a separate GameMode class/Blueprint option string:
+ *  - NM_Standalone (Main opened directly, no EOSCore session): the sole local player is
+ *    switched to local hot-seat (bControlBothSides = true, see AShogiPlayerController)
+ *    since there is no second client that could ever log in as Gote.
+ *  - NM_ListenServer / NM_Client (reached via an EOSCore session hosted/joined from the
+ *    Title map): normal networked first-connects-Sente/second-connects-Gote assignment.
  */
 UCLASS()
 class SHOGI_API AShogiGameMode : public AGameModeBase

@@ -124,8 +124,14 @@
 - `bControlBothSides=true`の場合、`AShogiPlayerController::GetControllableSide()`が`PlayerSide`ではなく`GameState->CurrentTurn`を返すようになり、1つのコントローラーで先手後手を交互に操作できる
 - 手番が変わるたびに`GameState->OnTurnChanged`経由で`AShogiPlayerController::HandleTurnChanged()`が呼ばれ、`SenteCameraClass`/`GoteCameraClass`を使って現在の手番側のカメラに切り替える(選択状態もリセットされる)
 
-### 10.3 起動方法(メニューからの配線はユーザーがBlueprintで行う)
-これらのGameModeは`Content/Map/Main.umap`のWorld Settingsには設定していない(既定はオンライン対戦用の`BP_ShogiGameMode`のまま)。メニューBP(`WBP_Main`等)から`OpenLevel`のOptions文字列で GameMode をオーバーライドして起動できる。
+### 10.3 起動方法
+
+`Content/Map/Main.umap`のWorld Settingsは`BP_ShogiGameMode`(`AShogiGameMode`)のまま変更していない。ただし`AShogiGameMode::PostLogin`が`GetNetMode() == NM_Standalone`を検知した場合、唯一のローカルプレイヤーを自動的に`bControlBothSides = true`(ホットシート)にする。そのため:
+
+- **`Main`を直接開く/Standaloneで起動する**(EOSCoreセッションを介さない) → 自動的にホットシートのシングルプレイになる。GameMode切り替えのBlueprint配線は不要
+- **`Title`からEOSCoreセッションをホスト/参加して`Main`へ渡る** → `NM_ListenServer`/`NM_Client`になるため、通常のオンライン対戦(先着1人目=先手・2人目=後手)になる。こちらもGameMode切り替え不要(セッションのホスト/参加そのものはBlueprint側のEOSCore配線、`docs/GameSpec.md`スコープ外)
+
+`AShogiSinglePlayerVsAIGameMode`(CPU対戦)は上記の自動判定に含まれないため、引き続き明示的に選択する必要がある場合はメニューBPから`OpenLevel`のOptions文字列でGameModeをオーバーライドすること:
 
 §11の手順5と同じ理由(`AShogiPlayerController`のカメラ/ウィジェットクラス参照をClass Defaultsで設定する必要がある)で、これらのGameModeも**それぞれ薄いBlueprint子クラスを作り、`PlayerControllerClass`を`BP_ShogiPlayerController`に上書きしてから使うこと**:
 - `BP_ShogiSinglePlayerVsAIGameMode`(親: `AShogiSinglePlayerVsAIGameMode`) — 併せて`LocalHumanSide`/`AIThinkDelaySeconds`もここで調整可能

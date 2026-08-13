@@ -214,8 +214,13 @@ void AShogiBoardManager::UpdateStandLayout()
 		{
 			if (AShogiPiece* Piece = HandActors[Index])
 			{
-				const FVector Offset((Index % 3) * BoardCellSizeX, (Index / 3) * BoardCellSizeY, 0.f);
-				Piece->SetActorLocation(Komadai->GetComponentLocation() + Offset);
+				// Offset is expressed along the Komadai's own local axes (not raw world X/Y) so the
+				// stacking direction follows the stand's placement/rotation - GoteKomadai is rotated
+				// to face the opposite way from SenteKomadai, so a world-space offset would stack
+				// pieces in the wrong direction and overflow off the board.
+				const FVector LocalOffset((Index % 3) * BoardCellSizeX, (Index / 3) * BoardCellSizeY, 0.f);
+				const FVector WorldOffset = Komadai->GetComponentRotation().RotateVector(LocalOffset);
+				Piece->SetActorLocation(Komadai->GetComponentLocation() + WorldOffset);
 			}
 		}
 	};
@@ -540,10 +545,24 @@ void AShogiBoardManager::OnRep_PieceActorArray()
 	RefreshBoardVisual();
 }
 
+void AShogiBoardManager::OnRep_HandPieceActors_Sente()
+{
+	UpdateStandLayout();
+}
+
+void AShogiBoardManager::OnRep_HandPieceActors_Gote()
+{
+	UpdateStandLayout();
+}
+
 void AShogiBoardManager::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AShogiBoardManager, BoardArray);
 	DOREPLIFETIME(AShogiBoardManager, PieceActorArray);
+	DOREPLIFETIME(AShogiBoardManager, CapturedPieces_Sente);
+	DOREPLIFETIME(AShogiBoardManager, CapturedPieces_Gote);
+	DOREPLIFETIME(AShogiBoardManager, HandPieceActors_Sente);
+	DOREPLIFETIME(AShogiBoardManager, HandPieceActors_Gote);
 }

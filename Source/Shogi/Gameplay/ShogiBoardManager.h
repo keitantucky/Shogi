@@ -42,16 +42,16 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_PieceActorArray, BlueprintReadOnly, Category = "Shogi")
 	TArray<TObjectPtr<AShogiPiece>> PieceActorArray;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Shogi")
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
 	TArray<FShogiPieceData> CapturedPieces_Sente;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Shogi")
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
 	TArray<FShogiPieceData> CapturedPieces_Gote;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Shogi")
+	UPROPERTY(ReplicatedUsing = OnRep_HandPieceActors_Sente, BlueprintReadOnly, Category = "Shogi")
 	TArray<TObjectPtr<AShogiPiece>> HandPieceActors_Sente;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Shogi")
+	UPROPERTY(ReplicatedUsing = OnRep_HandPieceActors_Gote, BlueprintReadOnly, Category = "Shogi")
 	TArray<TObjectPtr<AShogiPiece>> HandPieceActors_Gote;
 
 	UPROPERTY(VisibleAnywhere, Category = "Shogi")
@@ -152,6 +152,12 @@ protected:
 
 	UFUNCTION()
 	void OnRep_PieceActorArray();
+
+	UFUNCTION()
+	void OnRep_HandPieceActors_Sente();
+
+	UFUNCTION()
+	void OnRep_HandPieceActors_Gote();
 
 private:
 	UPROPERTY()

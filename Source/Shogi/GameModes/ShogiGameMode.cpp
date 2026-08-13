@@ -26,6 +26,13 @@ void AShogiGameMode::PostLogin(APlayerController* NewPlayer)
 		SentePlayer = ShogiPC;
 		ShogiPC->PlayerSide = EPlayerSide::Sente;
 		++JoinedPlayerCount;
+
+		// Standalone means Main was opened directly (no EOSCore session) - there is no
+		// second client that could ever log in as Gote, so default to local hot-seat.
+		if (GetNetMode() == NM_Standalone)
+		{
+			ShogiPC->bControlBothSides = true;
+		}
 	}
 	else if (JoinedPlayerCount == 1)
 	{

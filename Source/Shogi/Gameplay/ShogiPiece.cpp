@@ -60,7 +60,13 @@ void AShogiPiece::UpdateAppearance()
 	}
 
 	const float Yaw = (PieceData.PlayerSide == EPlayerSide::Gote) ? 180.f : 0.f;
-	SetActorRelativeRotation(FRotator(0.f, Yaw, 0.f));
+
+	// Promoted pieces are flipped over (like a real double-sided Shogi piece) by pitching
+	// 180 degrees around the piece's own left-right axis. Applying Pitch before Yaw
+	// (FRotator composes Roll, then Pitch, then Yaw) keeps this flip correct regardless of
+	// which way the piece is currently facing.
+	const float Pitch = PieceData.bIsPromoted ? 180.f : 0.f;
+	SetActorRelativeRotation(FRotator(Pitch, Yaw, 0.f));
 }
 
 void AShogiPiece::SetPromoted(bool bNewPromoted)

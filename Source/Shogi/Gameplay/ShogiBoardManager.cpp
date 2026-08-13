@@ -6,7 +6,10 @@
 #include "ShogiMoveMatrixRow.h"
 #include "ShogiRulesLibrary.h"
 #include "ShogiPromotionLibrary.h"
+#include "ShogiCardEffectLibrary.h"
 #include "ShogiGameState.h"
+#include "ShogiGameMode.h"
+#include "ShogiPlayerController.h"
 #include "Components/SceneComponent.h"
 #include "Engine/DataTable.h"
 #include "Net/UnrealNetwork.h"
@@ -341,7 +344,154 @@ void AShogiBoardManager::AdvanceTurn()
 	{
 		GS->CurrentTurn = (GS->CurrentTurn == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
 		GS->bInCheck = IsKingInCheck(GS->CurrentTurn);
+
+		// Start CurrentTurn's card phase (see docs/2026-08-14-card-system-phase-a.md): draw a
+		// card into whichever controller currently plays that side, and require it to resolve
+		// (play a card or pass) before a move/drop is accepted. If nobody controls that side
+		// (the AI's side in AShogiSinglePlayerVsAIGameMode, which moves via ApplyMove/ApplyDrop
+		// directly rather than through a controller), auto-resolve so the AI isn't blocked.
+		GS->bCardPhaseResolved = false;
+		if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
+		{
+			if (AShogiPlayerController* PC = GM->GetControllerForSide(GS->CurrentTurn))
+			{
+				PC->DrawCardForSide(GS->CurrentTurn);
+			}
+			// If no controller exists for the new CurrentTurn (the AI's side in
+			// AShogiSinglePlayerVsAIGameMode), leave bCardPhaseResolved false here - the lazy
+			// check in ApplyMove/ApplyDrop resolves it the moment the AI's direct ApplyMove/
+			// ApplyDrop call arrives, without needing a controller to exist at this point in
+			// time (which may be before PostLogin has run, at initial BeginPlay).
+		}
+
 		GS->OnRep_CurrentTurn();
+	}
+}
+
+bool AShogiBoardManager::ResolveCardPhaseIfUncontrolled(AShogiGameState* GS, EPlayerSide Side)
+{
+	if (!GS)
+	{
+		return false;
+	}
+	if (GS->bCardPhaseResolved)
+	{
+		return true;
+	}
+
+	AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr;
+	AShogiPlayerController* PC = GM ? GM->GetControllerForSide(Side) : nullptr;
+	if (PC)
+	{
+		// A controller plays this side - it must resolve the card phase itself first.
+		return false;
+	}
+
+	// Nobody controls this side yet/at all (AI's direct-call side, or evaluated before any
+	// controller has logged in) - auto-resolve so the caller (e.g. MakeAIMove) isn't blocked.
+	GS->bCardPhaseResolved = true;
+	return true;
+}
+
+bool AShogiBoardManager::ApplyCardEffect(ECardType CardType, EPlayerSide RequestingSide, int32 TargetBoardIndex, AShogiPiece* TargetHandPieceActor)
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	AShogiGameState* GS = GetShogiGameState();
+	if (!GS || GS->bGameOver || GS->CurrentTurn != RequestingSide || GS->bCardPhaseResolved)
+	{
+		return false;
+	}
+
+	const EPlayerSide OpponentSide = (RequestingSide == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
+
+	switch (CardType)
+	{
+		case ECardType::FuRocket:
+		{
+			if (!UShogiCardEffectLibrary::IsValidFuRocketTarget(BoardArray, RequestingSide, TargetBoardIndex))
+			{
+				return false;
+			}
+			UShogiCardEffectLibrary::ApplyFuRocket(BoardArray, TargetBoardIndex);
+			if (AShogiPiece* Actor = PieceActorArray.IsValidIndex(TargetBoardIndex) ? PieceActorArray[TargetBoardIndex] : nullptr)
+			{
+				Actor->PieceData = BoardArray[TargetBoardIndex];
+				Actor->UpdateAppearance();
+			}
+			return true;
+		}
+
+		case ECardType::InstantAwakening:
+		{
+			if (!UShogiCardEffectLibrary::IsValidInstantAwakeningTarget(BoardArray, RequestingSide, TargetBoardIndex))
+			{
+				return false;
+			}
+			UShogiCardEffectLibrary::ApplyInstantAwakening(BoardArray, TargetBoardIndex);
+			if (AShogiPiece* Actor = PieceActorArray.IsValidIndex(TargetBoardIndex) ? PieceActorArray[TargetBoardIndex] : nullptr)
+			{
+				Actor->PieceData = BoardArray[TargetBoardIndex];
+				Actor->UpdateAppearance();
+			}
+			return true;
+		}
+
+		case ECardType::TenpenChii:
+		{
+			UShogiCardEffectLibrary::ApplyTenpenChii(BoardArray);
+			for (int32 Index = 0; Index < PieceActorArray.Num(); ++Index)
+			{
+				if (AShogiPiece* Actor = PieceActorArray[Index])
+				{
+					Actor->PieceData = BoardArray[Index];
+					Actor->UpdateAppearance();
+				}
+			}
+			GS->bInCheck = IsKingInCheck(GS->CurrentTurn);
+			return true;
+		}
+
+		case ECardType::Hyena:
+		{
+			TArray<FShogiPieceData>& OpponentCaptured = (OpponentSide == EPlayerSide::Sente) ? CapturedPieces_Sente : CapturedPieces_Gote;
+			TArray<TObjectPtr<AShogiPiece>>& OpponentHand = (OpponentSide == EPlayerSide::Sente) ? HandPieceActors_Sente : HandPieceActors_Gote;
+			TArray<FShogiPieceData>& OwnCaptured = (RequestingSide == EPlayerSide::Sente) ? CapturedPieces_Sente : CapturedPieces_Gote;
+			TArray<TObjectPtr<AShogiPiece>>& OwnHand = (RequestingSide == EPlayerSide::Sente) ? HandPieceActors_Sente : HandPieceActors_Gote;
+
+			if (!UShogiCardEffectLibrary::HasValidTarget(CardType, BoardArray, OpponentCaptured, RequestingSide))
+			{
+				return false;
+			}
+
+			const int32 StolenIndex = OpponentHand.IndexOfByKey(TargetHandPieceActor);
+			if (StolenIndex == INDEX_NONE || !OpponentCaptured.IsValidIndex(StolenIndex))
+			{
+				return false;
+			}
+
+			FShogiPieceData Stolen = OpponentCaptured[StolenIndex];
+			Stolen.PlayerSide = RequestingSide;
+
+			OpponentHand.RemoveAt(StolenIndex);
+			OpponentCaptured.RemoveAt(StolenIndex);
+
+			TargetHandPieceActor->PieceData = Stolen;
+			TargetHandPieceActor->UpdateAppearance();
+
+			OwnHand.Add(TargetHandPieceActor);
+			OwnCaptured.Add(Stolen);
+
+			UpdateStandLayout();
+			return true;
+		}
+
+		default:
+			// Phase B cards have no effect logic yet.
+			return false;
 	}
 }
 
@@ -392,10 +542,17 @@ void AShogiBoardManager::ApplyMove(int32 From, int32 To, EPlayerSide RequestingS
 		return;
 	}
 
-	if (const AShogiGameState* GS = GetShogiGameState())
+	if (AShogiGameState* GS = GetShogiGameState())
 	{
 		if (GS->bGameOver || GS->CurrentTurn != RequestingSide)
 		{
+			return;
+		}
+		if (!ResolveCardPhaseIfUncontrolled(GS, RequestingSide))
+		{
+			// bCardPhaseResolved gates the move/drop phase behind the card phase (see
+			// docs/2026-08-14-card-system-phase-a.md): a play-a-card-or-pass action must
+			// resolve first each turn.
 			return;
 		}
 	}
@@ -412,11 +569,12 @@ void AShogiBoardManager::ApplyMove(int32 From, int32 To, EPlayerSide RequestingS
 	}
 
 	UDataTable* MoveTable = GetMoveDataTableFor(MovingPiece);
-	if (!UShogiRulesLibrary::CheckCanMove(BoardArray, MovingPiece, From, To, MoveTable))
-	{
-		return;
-	}
-	if (!UShogiRulesLibrary::IsPathClear(BoardArray, From, To))
+	// Validate against the same GetMovableIndices the client's move markers and IsKingInCheck
+	// use (rather than calling CheckCanMove/IsPathClear separately), so that per-piece card
+	// buffs affecting move range (e.g. Fu Rocket's forward+2 jump, see
+	// docs/2026-08-14-card-system-phase-a.md) are honored here too - CheckCanMove alone only
+	// knows the DataTable-driven base move set and would reject a card-boosted destination.
+	if (!UShogiRulesLibrary::GetMovableIndices(BoardArray, MovingPiece, From, MoveTable).Contains(To))
 	{
 		return;
 	}
@@ -525,9 +683,14 @@ void AShogiBoardManager::ApplyDrop(int32 DropIndex, AShogiPiece* DropPieceActor,
 		return;
 	}
 
-	if (const AShogiGameState* GS = GetShogiGameState())
+	if (AShogiGameState* GS = GetShogiGameState())
 	{
 		if (GS->bGameOver || GS->CurrentTurn != RequestingSide)
+		{
+			return;
+		}
+		// See ApplyMove's matching check: card phase must resolve before a drop is legal too.
+		if (!ResolveCardPhaseIfUncontrolled(GS, RequestingSide))
 		{
 			return;
 		}
@@ -559,7 +722,10 @@ void AShogiBoardManager::ApplyDrop(int32 DropIndex, AShogiPiece* DropPieceActor,
 		return;
 	}
 
-	FShogiPieceData DroppedPiece;
+	// Start from the hand actor's existing data (not a fresh default) so permanent card buffs
+	// like Fu Rocket's bHasFuRocketBoost (see docs/2026-08-14-card-system-phase-a.md) survive
+	// being captured and later re-dropped, not just sitting in hand.
+	FShogiPieceData DroppedPiece = DropPieceActor->PieceData;
 	DroppedPiece.PieceType = DropPieceType;
 	DroppedPiece.PlayerSide = RequestingSide;
 	DroppedPiece.bIsPromoted = false; // dropped pieces are always unpromoted

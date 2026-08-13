@@ -7,11 +7,40 @@
 #include "ShogiRulesLibrary.h"
 #include "ShogiPromotionLibrary.h"
 #include "ShogiPromotionPromptWidgetBase.h"
+#include "ShogiCardEffectLibrary.h"
+#include "ShogiCardHandWidgetBase.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/InputComponent.h"
 #include "Engine/DataTable.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
+
+namespace
+{
+	// Phase A deck composition (see docs/2026-08-14-card-system-phase-a.md section 2.2):
+	// 30 cards total across the 4 implemented card types, evenly split as close as 30/4 allows.
+	void BuildPhaseADeck(TArray<ECardType>& OutDeck)
+	{
+		OutDeck.Reset();
+		auto AddCopies = [&OutDeck](ECardType Type, int32 Count)
+		{
+			for (int32 Index = 0; Index < Count; ++Index)
+			{
+				OutDeck.Add(Type);
+			}
+		};
+		AddCopies(ECardType::FuRocket, 8);
+		AddCopies(ECardType::Hyena, 8);
+		AddCopies(ECardType::InstantAwakening, 7);
+		AddCopies(ECardType::TenpenChii, 7);
+
+		for (int32 Index = OutDeck.Num() - 1; Index > 0; --Index)
+		{
+			const int32 SwapIndex = FMath::RandRange(0, Index);
+			OutDeck.Swap(Index, SwapIndex);
+		}
+	}
+}
 
 AShogiPlayerController::AShogiPlayerController()
 {
@@ -34,11 +63,24 @@ void AShogiPlayerController::BeginPlay()
 		GS->OnTurnChanged.AddDynamic(this, &AShogiPlayerController::HandleTurnChanged);
 	}
 
+	if (HasAuthority())
+	{
+		InitializeCardDecksAndInitialHands();
+	}
+
 	if (IsLocalController() && TurnWidgetClass)
 	{
 		if (UUserWidget* TurnWidget = CreateWidget<UUserWidget>(this, TurnWidgetClass))
 		{
 			TurnWidget->AddToViewport();
+		}
+	}
+
+	if (IsLocalController() && CardHandWidgetClass)
+	{
+		if (UShogiCardHandWidgetBase* CardWidget = CreateWidget<UShogiCardHandWidgetBase>(this, CardHandWidgetClass))
+		{
+			CardWidget->AddToViewport();
 		}
 	}
 }
@@ -132,6 +174,30 @@ void AShogiPlayerController::HandleLeftClick()
 	FHitResult Hit;
 	const bool bHitSomething = GetHitResultUnderCursorByChannel(UEngineTypes::ConvertToTraceType(ECC_Visibility), false, Hit);
 	AShogiPiece* HitPiece = bHitSomething ? Cast<AShogiPiece>(Hit.GetActor()) : nullptr;
+
+	if (SelectedCardType != ECardType::None)
+	{
+		// Card-target-selection mode (see SelectCardToPlay) takes priority over normal piece
+		// selection/movement - the next click supplies this card's target instead.
+		if (SelectedCardType == ECardType::Hyena)
+		{
+			const EPlayerSide OpponentSide = (GetControllableSide() == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
+			if (HitPiece && HitPiece->bIsCaptured && HitPiece->PieceData.PlayerSide == OpponentSide)
+			{
+				Server_RequestPlayCard(SelectedCardType, INDEX_NONE, HitPiece);
+			}
+		}
+		else
+		{
+			int32 CardTargetIndex = INDEX_NONE;
+			if (TryComputeClickedBoardIndex(CardTargetIndex))
+			{
+				Server_RequestPlayCard(SelectedCardType, CardTargetIndex, nullptr);
+			}
+		}
+		SelectedCardType = ECardType::None;
+		return;
+	}
 
 	if (HitPiece && HitPiece->bIsCaptured && HitPiece->PieceData.PlayerSide == GetControllableSide() && IsMyTurn())
 	{
@@ -242,6 +308,16 @@ void AShogiPlayerController::TryMoveOrDropTo(int32 Index)
 		return;
 	}
 
+	if (GameState && GameState->CurrentTurn == GetControllableSide() && !GameState->bCardPhaseResolved)
+	{
+		// The server would reject this move/drop anyway (see AShogiBoardManager::ApplyMove/
+		// ApplyDrop's ResolveCardPhaseIfUncontrolled gate) - catch it client-side so the player
+		// gets immediate feedback instead of a silent no-op, and don't bother sending the RPC.
+		bBlockedByCardPhase = true;
+		ClearSelection();
+		return;
+	}
+
 	if (SelectedHandPieceActor)
 	{
 		Server_RequestDropPiece(Index, SelectedHandPieceActor, SelectedHandPieceType);
@@ -346,6 +422,151 @@ void AShogiPlayerController::Server_RequestDropPiece_Implementation(int32 DropIn
 	}
 }
 
+FShogiCardHandState& AShogiPlayerController::GetCardState(EPlayerSide Side)
+{
+	return (Side == EPlayerSide::Gote) ? CardState_Gote : CardState_Sente;
+}
+
+const FShogiCardHandState& AShogiPlayerController::GetCardState(EPlayerSide Side) const
+{
+	return (Side == EPlayerSide::Gote) ? CardState_Gote : CardState_Sente;
+}
+
+TArray<ECardType>& AShogiPlayerController::GetDeck(EPlayerSide Side)
+{
+	return (Side == EPlayerSide::Gote) ? Deck_Gote : Deck_Sente;
+}
+
+void AShogiPlayerController::InitializeCardDecksAndInitialHands()
+{
+	BuildPhaseADeck(Deck_Sente);
+	BuildPhaseADeck(Deck_Gote);
+	CardState_Sente.Hand.Reset();
+	CardState_Gote.Hand.Reset();
+
+	// Setup-phase initial hand (see docs/GameConcept.md flow §1): 3 cards each, dealt before
+	// the turn loop's per-turn draw ever runs.
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		DrawCardForSide(EPlayerSide::Sente);
+		DrawCardForSide(EPlayerSide::Gote);
+	}
+}
+
+void AShogiPlayerController::DrawCardForSide(EPlayerSide Side)
+{
+	if (Side == EPlayerSide::None)
+	{
+		return;
+	}
+
+	FShogiCardHandState& State = GetCardState(Side);
+	TArray<ECardType>& Deck = GetDeck(Side);
+	if (State.Hand.Num() >= 3 || Deck.Num() == 0)
+	{
+		return;
+	}
+
+	State.Hand.Add(Deck[0]);
+	Deck.RemoveAt(0);
+}
+
+const TArray<ECardType>& AShogiPlayerController::GetMyHand() const
+{
+	return GetCardState(GetControllableSide()).Hand;
+}
+
+bool AShogiPlayerController::IsCardPlayable(ECardType CardType) const
+{
+	if (!GameState || GameState->bGameOver || GameState->CurrentTurn != GetControllableSide() || GameState->bCardPhaseResolved)
+	{
+		return false;
+	}
+
+	if (!GetCardState(GetControllableSide()).Hand.Contains(CardType))
+	{
+		return false;
+	}
+
+	if (!BoardManager)
+	{
+		return false;
+	}
+
+	const EPlayerSide OpponentSide = (GetControllableSide() == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
+	const TArray<FShogiPieceData>& OpponentCaptured =
+		(OpponentSide == EPlayerSide::Sente) ? BoardManager->CapturedPieces_Sente : BoardManager->CapturedPieces_Gote;
+
+	return UShogiCardEffectLibrary::HasValidTarget(CardType, BoardManager->BoardArray, OpponentCaptured, GetControllableSide());
+}
+
+void AShogiPlayerController::SelectCardToPlay(ECardType CardType)
+{
+	if (!IsCardPlayable(CardType))
+	{
+		return;
+	}
+
+	if (CardType == ECardType::TenpenChii)
+	{
+		// No target needed - send immediately rather than waiting for a click.
+		Server_RequestPlayCard(CardType, INDEX_NONE, nullptr);
+		return;
+	}
+
+	SelectedCardType = CardType;
+}
+
+void AShogiPlayerController::Server_RequestPlayCard_Implementation(ECardType CardType, int32 TargetBoardIndex, AShogiPiece* TargetHandPieceActor)
+{
+	AShogiBoardManager* BM = GetOrFindBoardManager();
+	AShogiGameState* GS = GetOrFindGameState();
+	if (!BM || !GS)
+	{
+		return;
+	}
+
+	const EPlayerSide Side = GetControllableSide();
+	if (GS->bGameOver || GS->CurrentTurn != Side || GS->bCardPhaseResolved)
+	{
+		return;
+	}
+
+	FShogiCardHandState& State = GetCardState(Side);
+	if (!State.Hand.Contains(CardType))
+	{
+		return;
+	}
+
+	if (BM->ApplyCardEffect(CardType, Side, TargetBoardIndex, TargetHandPieceActor))
+	{
+		State.Hand.RemoveSingle(CardType);
+		GS->bCardPhaseResolved = true;
+	}
+}
+
+void AShogiPlayerController::Server_PassCardPhase_Implementation()
+{
+	AShogiGameState* GS = GetOrFindGameState();
+	if (!GS || GS->bGameOver || GS->CurrentTurn != GetControllableSide())
+	{
+		return;
+	}
+
+	GS->bCardPhaseResolved = true;
+}
+
+void AShogiPlayerController::OnRep_CardState_Sente()
+{
+	// No extra client-side bookkeeping needed - UShogiCardHandWidgetBase reads GetMyHand()
+	// via its own periodic UMG text/visibility bindings, same as UShogiTurnWidgetBase does
+	// for turn text.
+}
+
+void AShogiPlayerController::OnRep_CardState_Gote()
+{
+}
+
 void AShogiPlayerController::SwitchCameraForSide(EPlayerSide Side)
 {
 	TSubclassOf<AActor> CameraClass = (Side == EPlayerSide::Gote) ? GoteCameraClass : SenteCameraClass;
@@ -369,6 +590,10 @@ void AShogiPlayerController::OnRep_PlayerSide()
 
 void AShogiPlayerController::HandleTurnChanged()
 {
+	// A new turn means a fresh, not-yet-attempted card phase - don't carry a stale warning
+	// from the previous turn's blocked move into this one.
+	bBlockedByCardPhase = false;
+
 	if (bControlBothSides)
 	{
 		ClearSelection();
@@ -379,9 +604,21 @@ void AShogiPlayerController::HandleTurnChanged()
 	}
 }
 
+FText AShogiPlayerController::GetCardPhaseWarningText() const
+{
+	if (bBlockedByCardPhase && GameState && !GameState->bCardPhaseResolved)
+	{
+		return NSLOCTEXT("Shogi", "CardPhaseWarningText", "カードフェーズ未解決です");
+	}
+	return FText::GetEmpty();
+}
+
 void AShogiPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AShogiPlayerController, PlayerSide);
+
+	DOREPLIFETIME_CONDITION(AShogiPlayerController, CardState_Sente, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(AShogiPlayerController, CardState_Gote, COND_OwnerOnly);
 }

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "ShogiTypes.h"
+#include "ShogiCardTypes.h"
 #include "ShogiPlayerController.generated.h"
 
 class AShogiPiece;
@@ -12,6 +13,7 @@ class AShogiBoardManager;
 class AShogiGameState;
 class UUserWidget;
 class UShogiPromotionPromptWidgetBase;
+class UShogiCardHandWidgetBase;
 
 /**
  * Native replacement for the Blueprint PlayerController BP_MyPlayerController.
@@ -65,11 +67,62 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Shogi")
 	TSubclassOf<UShogiPromotionPromptWidgetBase> PromotionPromptWidgetClass;
 
+	/** Assign to a new WBP_CardHand (parented to UShogiCardHandWidgetBase) in the editor. See docs/2026-08-14-card-system-phase-a.md. */
+	UPROPERTY(EditAnywhere, Category = "Shogi")
+	TSubclassOf<UShogiCardHandWidgetBase> CardHandWidgetClass;
+
 	UFUNCTION(Server, Reliable)
 	void Server_RequestMovePiece(int32 From, int32 To, bool bPromote);
 
 	UFUNCTION(Server, Reliable)
 	void Server_RequestDropPiece(int32 DropIndex, AShogiPiece* DropPieceActor, EPieceType DropPieceType);
+
+	/**
+	 * Plays CardType from this controller's (GetControllableSide()'s) hand. TargetBoardIndex
+	 * is used by FuRocket/InstantAwakening, TargetHandPieceActor by Hyena; both are ignored
+	 * by cards that don't need them (e.g. TenpenChii). See docs/2026-08-14-card-system-phase-a.md.
+	 */
+	UFUNCTION(Server, Reliable)
+	void Server_RequestPlayCard(ECardType CardType, int32 TargetBoardIndex, AShogiPiece* TargetHandPieceActor);
+
+	/** Declines to play a card this turn, resolving the card phase so a move/drop becomes legal. */
+	UFUNCTION(Server, Reliable)
+	void Server_PassCardPhase();
+
+	/** This controller's hand for whichever side it currently controls (GetControllableSide()). UI bind target. */
+	UFUNCTION(BlueprintPure, Category = "Shogi|Cards")
+	const TArray<ECardType>& GetMyHand() const;
+
+	/** True if CardType is currently playable (in hand AND has a valid target) for GetControllableSide(). */
+	UFUNCTION(BlueprintPure, Category = "Shogi|Cards")
+	bool IsCardPlayable(ECardType CardType) const;
+
+	/**
+	 * Begins the card-target-selection flow for CardType (must be in GetMyHand() and pass
+	 * IsCardPlayable). Cards needing no target (TenpenChii) are sent to the server immediately;
+	 * others wait for the next board/hand-piece click to supply a target (see HandleLeftClick).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Shogi|Cards")
+	void SelectCardToPlay(ECardType CardType);
+
+	/**
+	 * Non-empty (「カードフェーズ未解決です」) whenever this controller just tried to move/drop a
+	 * piece on its own unresolved-card-phase turn (see TryMoveOrDropTo) and hasn't resolved the
+	 * card phase since. Automatically goes back to empty once the card phase resolves (playing a
+	 * card or passing) or a new turn starts - no explicit "clear" call needed. UI bind target for
+	 * a warning message (see docs/2026-08-14-card-system-phase-a.md).
+	 */
+	UFUNCTION(BlueprintPure, Category = "Shogi|Cards")
+	FText GetCardPhaseWarningText() const;
+
+	/**
+	 * Draws one card into Side's hand from this controller's deck for that side, if the hand
+	 * isn't already at the 3-card limit (no-op otherwise, and no-op if the deck is empty).
+	 * Called by AShogiBoardManager::AdvanceTurn at the start of Side's turn - a plain function
+	 * (not an RPC) since it's only ever invoked server-side, matching AShogiBoardManager::
+	 * ApplyMove/ApplyDrop's convention.
+	 */
+	void DrawCardForSide(EPlayerSide Side);
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -84,6 +137,12 @@ protected:
 	void HandleTurnChanged();
 
 	void HandleLeftClick();
+
+	UFUNCTION()
+	void OnRep_CardState_Sente();
+
+	UFUNCTION()
+	void OnRep_CardState_Gote();
 
 private:
 	UPROPERTY()
@@ -100,7 +159,36 @@ private:
 	TObjectPtr<AShogiPiece> SelectedHandPieceActor;
 	EPieceType SelectedHandPieceType = EPieceType::None;
 
+	// Card currently "armed" by SelectCardToPlay, awaiting a target click (or already sent,
+	// for cards that need none). Cleared once Server_RequestPlayCard is sent.
+	ECardType SelectedCardType = ECardType::None;
+
+	// Set by TryMoveOrDropTo when it refuses to send a move/drop RPC because the card phase
+	// isn't resolved yet. See GetCardPhaseWarningText. Reset in HandleTurnChanged so a stale
+	// warning from a previous turn never bleeds into the next one.
+	bool bBlockedByCardPhase = false;
+
 	TArray<int32> CurrentMovableList;
+
+	// Hands (Hand only - see FShogiCardHandState), replicated to this controller's owning
+	// client only. Both members exist on every controller instance so a single hot-seat
+	// controller (bControlBothSides) can hold both sides' hands; a normal online controller
+	// only ever populates the member matching its own PlayerSide.
+	UPROPERTY(ReplicatedUsing = OnRep_CardState_Sente)
+	FShogiCardHandState CardState_Sente;
+
+	UPROPERTY(ReplicatedUsing = OnRep_CardState_Gote)
+	FShogiCardHandState CardState_Gote;
+
+	// Server-only deck order for each side, never replicated (clients only ever see drawn
+	// cards via CardState_*.Hand).
+	TArray<ECardType> Deck_Sente;
+	TArray<ECardType> Deck_Gote;
+
+	FShogiCardHandState& GetCardState(EPlayerSide Side);
+	const FShogiCardHandState& GetCardState(EPlayerSide Side) const;
+	TArray<ECardType>& GetDeck(EPlayerSide Side);
+	void InitializeCardDecksAndInitialHands();
 
 	// Pending move awaiting an optional-promotion decision from the player.
 	int32 PendingMoveFrom = INDEX_NONE;

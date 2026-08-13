@@ -42,3 +42,16 @@ void AShogiGameMode::PostLogin(APlayerController* NewPlayer)
 	}
 	// 3rd+ connecting players are left at the default PlayerSide::None (spectator).
 }
+
+AShogiPlayerController* AShogiGameMode::GetControllerForSide(EPlayerSide Side) const
+{
+	if (SentePlayer && (SentePlayer->bControlBothSides || SentePlayer->PlayerSide == Side))
+	{
+		return SentePlayer;
+	}
+	if (GotePlayer && GotePlayer->PlayerSide == Side)
+	{
+		return GotePlayer;
+	}
+	return nullptr;
+}

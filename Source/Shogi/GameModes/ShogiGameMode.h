@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "ShogiTypes.h"
 #include "ShogiGameMode.generated.h"
 
 class AShogiPlayerController;
@@ -41,4 +42,18 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Shogi")
 	TObjectPtr<AShogiPlayerController> GotePlayer;
+
+	/**
+	 * Finds whichever connected controller currently acts for Side, used by
+	 * AShogiBoardManager::AdvanceTurn to start that side's card phase (see
+	 * docs/2026-08-14-card-system-phase-a.md). Checks each controller's actual PlayerSide/
+	 * bControlBothSides rather than trusting the SentePlayer/GotePlayer slot names, since
+	 * AShogiSinglePlayerVsAIGameMode overwrites PlayerSide to LocalHumanSide after the base
+	 * class's PostLogin already stored the controller in the SentePlayer slot - the human
+	 * could end up actually playing Gote while still sitting in the "SentePlayer" field.
+	 * Returns nullptr if nobody is currently controlling Side (e.g. the AI's side in
+	 * AShogiSinglePlayerVsAIGameMode, which moves via BoardManager directly, not a controller).
+	 */
+	UFUNCTION(BlueprintPure, Category = "Shogi")
+	AShogiPlayerController* GetControllerForSide(EPlayerSide Side) const;
 };

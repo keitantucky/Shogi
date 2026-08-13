@@ -54,4 +54,14 @@ struct SHOGI_API FShogiPieceData
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
 	bool bIsPromoted = false;
+
+	/**
+	 * Set by the "Fu Rocket" card (see docs/2026-08-14-card-system-phase-a.md). Permanent
+	 * once granted - persists through capture/drop like every other field here, since
+	 * FShogiPieceData is copied wholesale by ApplyMove's capture logic and ApplyDrop.
+	 * Only meaningful for EPieceType::Fu; UShogiRulesLibrary::GetMovableIndices adds an
+	 * extra forward+2 destination when this is set.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
+	bool bHasFuRocketBoost = false;
 };

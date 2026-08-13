@@ -28,6 +28,16 @@ public:
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
 	bool bInCheck = false;
 
+	/**
+	 * True once CurrentTurn's side has resolved its card phase this turn (played a card or
+	 * passed) - see docs/2026-08-14-card-system-phase-a.md. AShogiBoardManager::ApplyMove/
+	 * ApplyDrop reject requests while this is false, enforcing "play a card (or pass) before
+	 * moving". Reset to false by AShogiBoardManager::AdvanceTurn whenever CurrentTurn changes.
+	 * Shared/public information (not hand contents), so no COND_OwnerOnly is needed.
+	 */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
+	bool bCardPhaseResolved = false;
+
 	UPROPERTY(BlueprintAssignable, Category = "Shogi")
 	FOnShogiTurnChanged OnTurnChanged;
 

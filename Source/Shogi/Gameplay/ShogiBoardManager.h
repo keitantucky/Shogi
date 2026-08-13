@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "ShogiTypes.h"
+#include "ShogiCardTypes.h"
 #include "ShogiBoardManager.generated.h"
 
 class AShogiPiece;
@@ -143,6 +144,19 @@ public:
 	void ApplyDrop(int32 DropIndex, AShogiPiece* DropPieceActor, EPieceType DropPieceType, EPlayerSide RequestingSide);
 
 	/**
+	 * Server-authoritative card-effect application (see docs/2026-08-14-card-system-phase-a.md).
+	 * Must only be called on the server, from AShogiPlayerController::Server_RequestPlayCard_
+	 * Implementation. Re-validates turn/card-phase/target legality itself rather than trusting
+	 * the caller. TargetBoardIndex is used by FuRocket/InstantAwakening, TargetHandPieceActor
+	 * by Hyena (must be one of the opponent's captured-piece actors); both are ignored by
+	 * cards that need neither (TenpenChii). Returns true only if the effect was actually
+	 * applied - the caller (PlayerController) removes the card from hand and resolves the
+	 * card phase only on a true return.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Shogi")
+	bool ApplyCardEffect(ECardType CardType, EPlayerSide RequestingSide, int32 TargetBoardIndex, AShogiPiece* TargetHandPieceActor);
+
+	/**
 	 * True if any of Side's opponent's pieces could currently move onto Side's King
 	 * square (i.e. Side is in check). Display-only (see docs/GameSpec.md - this does not
 	 * restrict move legality, so moves that ignore or walk into check are still allowed).
@@ -173,6 +187,17 @@ private:
 
 	AShogiPiece* SpawnPieceActor(const FShogiPieceData& PieceData, int32 BoardIndex);
 	void AdvanceTurn();
+
+	/**
+	 * True if Side's card phase is (now) resolved and a move/drop may proceed. If
+	 * GS->bCardPhaseResolved is already true, returns true immediately. Otherwise, looks up
+	 * whether any controller currently plays Side (AShogiGameMode::GetControllerForSide) - if
+	 * not (the AI's side in AShogiSinglePlayerVsAIGameMode, or the very first turn evaluated
+	 * before any controller has logged in), latches bCardPhaseResolved=true and returns true;
+	 * if a controller does exist, returns false (that controller must call
+	 * Server_RequestPlayCard/Server_PassCardPhase first). See docs/2026-08-14-card-system-phase-a.md.
+	 */
+	bool ResolveCardPhaseIfUncontrolled(class AShogiGameState* GS, EPlayerSide Side);
 	class AShogiGameState* GetShogiGameState() const;
 	static void DebugLogTableContents(UDataTable* Table, const FString& Label);
 };

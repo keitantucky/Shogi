@@ -21,4 +21,5 @@ void AShogiGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AShogiGameState, bInCheck);
 	DOREPLIFETIME(AShogiGameState, bGameOver);
 	DOREPLIFETIME(AShogiGameState, Winner);
+	DOREPLIFETIME(AShogiGameState, bCardPhaseResolved);
 }

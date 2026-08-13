@@ -17,29 +17,23 @@
 
 namespace
 {
-	// Phase A deck composition (see docs/2026-08-14-card-system-phase-a.md section 2.2):
-	// 30 cards total across the 4 implemented card types, evenly split as close as 30/4 allows.
-	void BuildPhaseADeck(TArray<ECardType>& OutDeck)
+	// All 10 implemented card types, used to draw uniformly at random from an effectively
+	// infinite deck (see docs/2026-08-14-card-system-phase-b.md 2.2, revised: the hand is
+	// fully redrawn - 3 fresh cards - at the start of every turn rather than incrementally
+	// drawn from a finite, depleting deck).
+	const ECardType AllCardTypes[] =
 	{
-		OutDeck.Reset();
-		auto AddCopies = [&OutDeck](ECardType Type, int32 Count)
-		{
-			for (int32 Index = 0; Index < Count; ++Index)
-			{
-				OutDeck.Add(Type);
-			}
-		};
-		AddCopies(ECardType::FuRocket, 8);
-		AddCopies(ECardType::Hyena, 8);
-		AddCopies(ECardType::InstantAwakening, 7);
-		AddCopies(ECardType::TenpenChii, 7);
-
-		for (int32 Index = OutDeck.Num() - 1; Index > 0; --Index)
-		{
-			const int32 SwapIndex = FMath::RandRange(0, Index);
-			OutDeck.Swap(Index, SwapIndex);
-		}
-	}
+		ECardType::FuRocket,
+		ECardType::InstantAwakening,
+		ECardType::TenpenChii,
+		ECardType::Hyena,
+		ECardType::RentalReservation,
+		ECardType::PetrifyCurse,
+		ECardType::PositionSwap,
+		ECardType::MegatonImpact,
+		ECardType::SelfDestructBomb,
+		ECardType::TemporaryInvincibility,
+	};
 }
 
 AShogiPlayerController::AShogiPlayerController()
@@ -65,7 +59,7 @@ void AShogiPlayerController::BeginPlay()
 
 	if (HasAuthority())
 	{
-		InitializeCardDecksAndInitialHands();
+		InitializeInitialHands();
 	}
 
 	if (IsLocalController() && TurnWidgetClass)
@@ -432,28 +426,15 @@ const FShogiCardHandState& AShogiPlayerController::GetCardState(EPlayerSide Side
 	return (Side == EPlayerSide::Gote) ? CardState_Gote : CardState_Sente;
 }
 
-TArray<ECardType>& AShogiPlayerController::GetDeck(EPlayerSide Side)
+void AShogiPlayerController::InitializeInitialHands()
 {
-	return (Side == EPlayerSide::Gote) ? Deck_Gote : Deck_Sente;
+	// Setup-phase initial hand (see docs/GameConcept.md flow §1): both sides start with a
+	// fresh 3-card hand, same as every subsequent turn's redraw.
+	RedrawHandForSide(EPlayerSide::Sente);
+	RedrawHandForSide(EPlayerSide::Gote);
 }
 
-void AShogiPlayerController::InitializeCardDecksAndInitialHands()
-{
-	BuildPhaseADeck(Deck_Sente);
-	BuildPhaseADeck(Deck_Gote);
-	CardState_Sente.Hand.Reset();
-	CardState_Gote.Hand.Reset();
-
-	// Setup-phase initial hand (see docs/GameConcept.md flow §1): 3 cards each, dealt before
-	// the turn loop's per-turn draw ever runs.
-	for (int32 Index = 0; Index < 3; ++Index)
-	{
-		DrawCardForSide(EPlayerSide::Sente);
-		DrawCardForSide(EPlayerSide::Gote);
-	}
-}
-
-void AShogiPlayerController::DrawCardForSide(EPlayerSide Side)
+void AShogiPlayerController::RedrawHandForSide(EPlayerSide Side)
 {
 	if (Side == EPlayerSide::None)
 	{
@@ -461,14 +442,11 @@ void AShogiPlayerController::DrawCardForSide(EPlayerSide Side)
 	}
 
 	FShogiCardHandState& State = GetCardState(Side);
-	TArray<ECardType>& Deck = GetDeck(Side);
-	if (State.Hand.Num() >= 3 || Deck.Num() == 0)
+	State.Hand.Reset();
+	for (int32 Index = 0; Index < 3; ++Index)
 	{
-		return;
+		State.Hand.Add(AllCardTypes[FMath::RandRange(0, UE_ARRAY_COUNT(AllCardTypes) - 1)]);
 	}
-
-	State.Hand.Add(Deck[0]);
-	Deck.RemoveAt(0);
 }
 
 const TArray<ECardType>& AShogiPlayerController::GetMyHand() const
@@ -542,18 +520,123 @@ void AShogiPlayerController::Server_RequestPlayCard_Implementation(ECardType Car
 	{
 		State.Hand.RemoveSingle(CardType);
 		GS->bCardPhaseResolved = true;
+		BM->OnCardPhaseResolved(Side);
 	}
 }
 
 void AShogiPlayerController::Server_PassCardPhase_Implementation()
 {
 	AShogiGameState* GS = GetOrFindGameState();
+	AShogiBoardManager* BM = GetOrFindBoardManager();
 	if (!GS || GS->bGameOver || GS->CurrentTurn != GetControllableSide())
 	{
 		return;
 	}
 
 	GS->bCardPhaseResolved = true;
+	if (BM)
+	{
+		BM->OnCardPhaseResolved(GetControllableSide());
+	}
+}
+
+void AShogiPlayerController::ForceRandomCardOrPass()
+{
+	AShogiBoardManager* BM = GetOrFindBoardManager();
+	AShogiGameState* GS = GetOrFindGameState();
+	if (!BM || !GS || GS->bGameOver)
+	{
+		return;
+	}
+
+	const EPlayerSide Side = GetControllableSide();
+	if (GS->CurrentTurn != Side || GS->bCardPhaseResolved)
+	{
+		return;
+	}
+
+	FShogiCardHandState& State = GetCardState(Side);
+	const EPlayerSide OpponentSide = (Side == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
+	const TArray<FShogiPieceData>& OpponentCaptured =
+		(OpponentSide == EPlayerSide::Sente) ? BM->CapturedPieces_Sente : BM->CapturedPieces_Gote;
+
+	TArray<ECardType> PlayableCards;
+	for (ECardType CardType : State.Hand)
+	{
+		if (UShogiCardEffectLibrary::HasValidTarget(CardType, BM->BoardArray, OpponentCaptured, Side))
+		{
+			PlayableCards.Add(CardType);
+		}
+	}
+
+	if (PlayableCards.Num() == 0)
+	{
+		// Nothing in hand is currently playable - forced pass.
+		GS->bCardPhaseResolved = true;
+		BM->OnCardPhaseResolved(Side);
+		return;
+	}
+
+	const ECardType ChosenCard = PlayableCards[FMath::RandRange(0, PlayableCards.Num() - 1)];
+
+	int32 TargetBoardIndex = INDEX_NONE;
+	AShogiPiece* TargetHandPieceActor = nullptr;
+
+	if (ChosenCard == ECardType::Hyena)
+	{
+		const TArray<TObjectPtr<AShogiPiece>>& OpponentHand =
+			(OpponentSide == EPlayerSide::Sente) ? BM->HandPieceActors_Sente : BM->HandPieceActors_Gote;
+		TArray<AShogiPiece*> Candidates;
+		for (AShogiPiece* Actor : OpponentHand)
+		{
+			if (Actor)
+			{
+				Candidates.Add(Actor);
+			}
+		}
+		if (Candidates.Num() > 0)
+		{
+			TargetHandPieceActor = Candidates[FMath::RandRange(0, Candidates.Num() - 1)];
+		}
+	}
+	else if (ChosenCard != ECardType::TenpenChii)
+	{
+		TArray<int32> Candidates;
+		for (int32 Index = 0; Index < BM->BoardArray.Num(); ++Index)
+		{
+			bool bValid = false;
+			switch (ChosenCard)
+			{
+				case ECardType::FuRocket:				bValid = UShogiCardEffectLibrary::IsValidFuRocketTarget(BM->BoardArray, Side, Index); break;
+				case ECardType::InstantAwakening:		bValid = UShogiCardEffectLibrary::IsValidInstantAwakeningTarget(BM->BoardArray, Side, Index); break;
+				case ECardType::PetrifyCurse:			bValid = UShogiCardEffectLibrary::IsValidPetrifyCurseTarget(BM->BoardArray, Side, Index); break;
+				case ECardType::PositionSwap:			bValid = UShogiCardEffectLibrary::IsValidPositionSwapTarget(BM->BoardArray, Side, Index); break;
+				case ECardType::MegatonImpact:			bValid = UShogiCardEffectLibrary::IsValidMegatonImpactTarget(BM->BoardArray, Index); break;
+				case ECardType::SelfDestructBomb:		bValid = UShogiCardEffectLibrary::IsValidSelfDestructBombTarget(BM->BoardArray, Side, Index); break;
+				case ECardType::TemporaryInvincibility:bValid = UShogiCardEffectLibrary::IsValidTemporaryInvincibilityTarget(BM->BoardArray, Side, Index); break;
+				case ECardType::RentalReservation:		bValid = UShogiCardEffectLibrary::IsValidRentalReservationTarget(BM->BoardArray, Side, Index); break;
+				default: break;
+			}
+			if (bValid)
+			{
+				Candidates.Add(Index);
+			}
+		}
+		if (Candidates.Num() > 0)
+		{
+			TargetBoardIndex = Candidates[FMath::RandRange(0, Candidates.Num() - 1)];
+		}
+	}
+
+	if (BM->ApplyCardEffect(ChosenCard, Side, TargetBoardIndex, TargetHandPieceActor))
+	{
+		State.Hand.RemoveSingle(ChosenCard);
+	}
+
+	// Resolve the card phase either way - HasValidTarget already confirmed ChosenCard should
+	// have succeeded, but fail safe so the turn is never stuck if it somehow didn't.
+	GS->bCardPhaseResolved = true;
+	BM->OnCardPhaseResolved(Side);
 }
 
 void AShogiPlayerController::OnRep_CardState_Sente()

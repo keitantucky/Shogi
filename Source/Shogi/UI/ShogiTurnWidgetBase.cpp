@@ -34,3 +34,20 @@ FText UShogiTurnWidgetBase::GetCurrentTurnText() const
 			return FText::GetEmpty();
 	}
 }
+
+FText UShogiTurnWidgetBase::GetPhaseTimerText() const
+{
+	const AShogiGameState* GS = GetWorld() ? GetWorld()->GetGameState<AShogiGameState>() : nullptr;
+	if (!GS || GS->bGameOver || GS->CurrentPhaseTimerEndTime < 0.f)
+	{
+		return FText::GetEmpty();
+	}
+
+	const int32 SecondsRemaining = FMath::CeilToInt(GS->GetPhaseTimerSecondsRemaining());
+	return FText::AsNumber(SecondsRemaining);
+}
+
+ESlateVisibility UShogiTurnWidgetBase::GetPhaseTimerVisibility() const
+{
+	return GetPhaseTimerText().IsEmpty() ? ESlateVisibility::Hidden : ESlateVisibility::Visible;
+}

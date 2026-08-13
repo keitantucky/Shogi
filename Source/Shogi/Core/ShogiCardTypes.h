@@ -7,26 +7,25 @@
 
 /**
  * Card catalogue for the card-effect system layered on top of core Shogi rules
- * (see docs/GameConcept.md for the full 10-card design, docs/2026-08-14-card-system-phase-a.md
- * for what is actually wired up). Only FuRocket/InstantAwakening/TenpenChii/Hyena have
- * effect logic in UShogiCardEffectLibrary/AShogiBoardManager::ApplyCardEffect - the
- * remaining values exist so the enum/deck-composition code is future-proofed, but they
- * are never added to a deck and hit the `default` (no-op) case anywhere they're switched on.
+ * (see docs/GameConcept.md for the full 10-card design). All 10 values now have effect
+ * logic in UShogiCardEffectLibrary/AShogiBoardManager::ApplyCardEffect - Phase A
+ * (docs/2026-08-14-card-system-phase-a.md) implemented FuRocket/InstantAwakening/
+ * TenpenChii/Hyena, Phase B (docs/2026-08-14-card-system-phase-b.md) added the rest.
  */
 UENUM(BlueprintType)
 enum class ECardType : uint8
 {
 	None					UMETA(DisplayName = "None"),
-	FuRocket				UMETA(DisplayName = "Fu Rocket (Phase A)"),
-	InstantAwakening		UMETA(DisplayName = "Instant Awakening (Phase A)"),
-	TenpenChii				UMETA(DisplayName = "Tenpen Chii (Phase A)"),
-	Hyena					UMETA(DisplayName = "Hyena (Phase A)"),
-	RentalReservation		UMETA(DisplayName = "Rental Reservation (Phase B, not implemented)"),
-	PetrifyCurse			UMETA(DisplayName = "Petrify Curse (Phase B, not implemented)"),
-	PositionSwap			UMETA(DisplayName = "Position Swap (Phase B, not implemented)"),
-	MegatonImpact			UMETA(DisplayName = "Megaton Impact (Phase B, not implemented)"),
-	SelfDestructBomb		UMETA(DisplayName = "Self-Destruct Bomb (Phase B, not implemented)"),
-	TemporaryInvincibility	UMETA(DisplayName = "Temporary Invincibility (Phase B, not implemented)")
+	FuRocket				UMETA(DisplayName = "Fu Rocket"),
+	InstantAwakening		UMETA(DisplayName = "Instant Awakening"),
+	TenpenChii				UMETA(DisplayName = "Tenpen Chii"),
+	Hyena					UMETA(DisplayName = "Hyena"),
+	RentalReservation		UMETA(DisplayName = "Rental Reservation"),
+	PetrifyCurse			UMETA(DisplayName = "Petrify Curse"),
+	PositionSwap			UMETA(DisplayName = "Position Swap"),
+	MegatonImpact			UMETA(DisplayName = "Megaton Impact"),
+	SelfDestructBomb		UMETA(DisplayName = "Self-Destruct Bomb"),
+	TemporaryInvincibility	UMETA(DisplayName = "Temporary Invincibility")
 };
 
 /**

@@ -10,18 +10,6 @@
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 
-namespace
-{
-	struct FAIMoveOption
-	{
-		bool bIsDrop = false;
-		int32 From = INDEX_NONE;
-		int32 To = INDEX_NONE;
-		AShogiPiece* DropActor = nullptr;
-		EPieceType DropPieceType = EPieceType::None;
-	};
-}
-
 EPlayerSide AShogiSinglePlayerVsAIGameMode::GetAISide() const
 {
 	return (LocalHumanSide == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
@@ -29,7 +17,14 @@ EPlayerSide AShogiSinglePlayerVsAIGameMode::GetAISide() const
 
 void AShogiSinglePlayerVsAIGameMode::PostLogin(APlayerController* NewPlayer)
 {
-	Super::PostLogin(NewPlayer);
+	// Deliberately skips AShogiGameMode::PostLogin (calls the grandparent directly) so its
+	// embedded TryStartInitialCardPhase() call doesn't fire before this override's own
+	// PlayerSide/bControlBothSides correction below - see AShogiGameMode::TryStartInitialCardPhase.
+	// Getting this wrong would let TryStartInitialCardPhase see the base class's transient
+	// NM_Standalone auto-hotseat bControlBothSides=true and hand the human Sente's card phase
+	// even when LocalHumanSide is Gote.
+	AGameModeBase::PostLogin(NewPlayer);
+	AssignPlayerSideOnLogin(NewPlayer);
 
 	if (AShogiPlayerController* ShogiPC = Cast<AShogiPlayerController>(NewPlayer))
 	{
@@ -44,6 +39,8 @@ void AShogiSinglePlayerVsAIGameMode::PostLogin(APlayerController* NewPlayer)
 	{
 		CachedShogiGameState->OnTurnChanged.AddDynamic(this, &AShogiSinglePlayerVsAIGameMode::HandleTurnChanged);
 	}
+
+	TryStartInitialCardPhase();
 
 	// Covers the (currently unlikely, since Sente always moves first) case where it's
 	// already the AI's turn by the time we start watching.
@@ -77,51 +74,10 @@ void AShogiSinglePlayerVsAIGameMode::MakeAIMove()
 		return;
 	}
 
-	TArray<FAIMoveOption> Options;
-
-	for (int32 Index = 0; Index < BoardManager->BoardArray.Num(); ++Index)
-	{
-		const FShogiPieceData& Piece = BoardManager->BoardArray[Index];
-		if (Piece.PlayerSide != AISide)
-		{
-			continue;
-		}
-
-		UDataTable* MoveTable = BoardManager->GetMoveDataTableFor(Piece);
-		const TArray<int32> Movable = UShogiRulesLibrary::GetMovableIndices(BoardManager->BoardArray, Piece, Index, MoveTable);
-		for (int32 To : Movable)
-		{
-			FAIMoveOption Option;
-			Option.From = Index;
-			Option.To = To;
-			Options.Add(Option);
-		}
-	}
-
-	const TArray<TObjectPtr<AShogiPiece>>& HandActors =
-		(AISide == EPlayerSide::Sente) ? BoardManager->HandPieceActors_Sente : BoardManager->HandPieceActors_Gote;
-
-	for (AShogiPiece* HandActor : HandActors)
-	{
-		if (!HandActor)
-		{
-			continue;
-		}
-		for (int32 Index = 0; Index < BoardManager->BoardArray.Num(); ++Index)
-		{
-			if (BoardManager->BoardArray[Index].PlayerSide == EPlayerSide::None)
-			{
-				FAIMoveOption Option;
-				Option.bIsDrop = true;
-				Option.To = Index;
-				Option.DropActor = HandActor;
-				Option.DropPieceType = HandActor->PieceData.PieceType;
-				Options.Add(Option);
-			}
-		}
-	}
-
-	if (Options.Num() == 0)
+	// Shared with the 15-second move-phase timeout - see
+	// docs/2026-08-14-card-system-phase-b.md 3.8 and AShogiBoardManager::PickRandomLegalAction.
+	FShogiLegalAction Chosen;
+	if (!BoardManager->PickRandomLegalAction(AISide, Chosen))
 	{
 		// No legal move or drop available - a stalemate-equivalent state. Full
 		// checkmate/stalemate handling is out of scope (see docs/GameSpec.md), so the
@@ -129,7 +85,6 @@ void AShogiSinglePlayerVsAIGameMode::MakeAIMove()
 		return;
 	}
 
-	const FAIMoveOption& Chosen = Options[FMath::RandRange(0, Options.Num() - 1)];
 	if (Chosen.bIsDrop)
 	{
 		BoardManager->ApplyDrop(Chosen.To, Chosen.DropActor, Chosen.DropPieceType, AISide);

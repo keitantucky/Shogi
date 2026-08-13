@@ -122,6 +122,14 @@ TArray<int32> UShogiRulesLibrary::GetMovableIndices(
 {
 	TArray<int32> MovableList;
 
+	// Petrify Curse card (see docs/2026-08-14-card-system-phase-b.md): a petrified piece can
+	// never move, overriding any move-granting buff (e.g. Fu Rocket) - checked first and
+	// unconditionally so nothing below can add a destination back in.
+	if (SelectedPiece.bIsPetrified)
+	{
+		return MovableList;
+	}
+
 	if (!MoveDataTable || !IsValidBoardIndex(FromIndex))
 	{
 		return MovableList;

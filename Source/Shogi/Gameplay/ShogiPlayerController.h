@@ -116,13 +116,24 @@ public:
 	FText GetCardPhaseWarningText() const;
 
 	/**
-	 * Draws one card into Side's hand from this controller's deck for that side, if the hand
-	 * isn't already at the 3-card limit (no-op otherwise, and no-op if the deck is empty).
-	 * Called by AShogiBoardManager::AdvanceTurn at the start of Side's turn - a plain function
-	 * (not an RPC) since it's only ever invoked server-side, matching AShogiBoardManager::
-	 * ApplyMove/ApplyDrop's convention.
+	 * Discards Side's current hand and deals a fresh 3 cards, drawn uniformly at random from
+	 * all 10 implemented card types (the deck is effectively infinite - see
+	 * docs/2026-08-14-card-system-phase-b.md 2.2, revised). Called by
+	 * AShogiBoardManager::AdvanceTurn at the start of Side's turn - a plain function (not an
+	 * RPC) since it's only ever invoked server-side, matching AShogiBoardManager::ApplyMove/
+	 * ApplyDrop's convention.
 	 */
-	void DrawCardForSide(EPlayerSide Side);
+	void RedrawHandForSide(EPlayerSide Side);
+
+	/**
+	 * 15-second card-phase timeout handler (see docs/2026-08-14-card-system-phase-b.md 3.7),
+	 * called by AShogiBoardManager::HandleCardPhaseTimeout - a plain function, not an RPC,
+	 * since it only ever runs server-side. Picks a uniformly-random playable card from
+	 * GetControllableSide()'s hand (with a random valid target if one is needed) and plays it
+	 * via the same path as Server_RequestPlayCard; if no card in hand is currently playable,
+	 * just resolves the card phase without playing anything (a forced pass).
+	 */
+	void ForceRandomCardOrPass();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -180,15 +191,9 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_CardState_Gote)
 	FShogiCardHandState CardState_Gote;
 
-	// Server-only deck order for each side, never replicated (clients only ever see drawn
-	// cards via CardState_*.Hand).
-	TArray<ECardType> Deck_Sente;
-	TArray<ECardType> Deck_Gote;
-
 	FShogiCardHandState& GetCardState(EPlayerSide Side);
 	const FShogiCardHandState& GetCardState(EPlayerSide Side) const;
-	TArray<ECardType>& GetDeck(EPlayerSide Side);
-	void InitializeCardDecksAndInitialHands();
+	void InitializeInitialHands();
 
 	// Pending move awaiting an optional-promotion decision from the player.
 	int32 PendingMoveFrom = INDEX_NONE;

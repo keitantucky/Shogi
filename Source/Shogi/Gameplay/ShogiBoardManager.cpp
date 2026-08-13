@@ -12,6 +12,7 @@
 #include "ShogiPlayerController.h"
 #include "Components/SceneComponent.h"
 #include "Engine/DataTable.h"
+#include "TimerManager.h"
 #include "Net/UnrealNetwork.h"
 
 namespace
@@ -338,33 +339,188 @@ AShogiGameState* AShogiBoardManager::GetShogiGameState() const
 	return GetWorld() ? GetWorld()->GetGameState<AShogiGameState>() : nullptr;
 }
 
+void AShogiBoardManager::TickTimedCardEffects(EPlayerSide NewCurrentTurn)
+{
+	// See docs/2026-08-14-card-system-phase-b.md 3.6. Runs once per AdvanceTurn call, right
+	// after CurrentTurn flips, so a reservation activating/reverting can affect this turn's
+	// check status before it's computed below.
+	for (int32 Index = 0; Index < BoardArray.Num(); ++Index)
+	{
+		FShogiPieceData& Piece = BoardArray[Index];
+		bool bChanged = false;
+
+		// Temporary Invincibility expires the moment its owner's own next turn begins.
+		if (Piece.PlayerSide == NewCurrentTurn && Piece.bIsInvincible)
+		{
+			Piece.bIsInvincible = false;
+			bChanged = true;
+		}
+
+		// Rental Reservation: tick / activate / revert.
+		if (Piece.PendingLoanCasterSide != EPlayerSide::None)
+		{
+			if (Piece.bLoanActive)
+			{
+				// The loan turn just ended - return the piece to its original owner.
+				Piece.PlayerSide = Piece.LoanOriginalOwnerSide;
+				Piece.PendingLoanCasterSide = EPlayerSide::None;
+				Piece.PendingLoanTurnsElapsed = 0;
+				Piece.bLoanActive = false;
+				Piece.LoanOriginalOwnerSide = EPlayerSide::None;
+				bChanged = true;
+			}
+			else
+			{
+				++Piece.PendingLoanTurnsElapsed;
+				if (Piece.PendingLoanTurnsElapsed >= 2 && NewCurrentTurn == Piece.PendingLoanCasterSide)
+				{
+					Piece.LoanOriginalOwnerSide = Piece.PlayerSide;
+					Piece.PlayerSide = Piece.PendingLoanCasterSide;
+					Piece.bLoanActive = true;
+					bChanged = true;
+				}
+			}
+		}
+
+		if (bChanged)
+		{
+			if (AShogiPiece* Actor = PieceActorArray.IsValidIndex(Index) ? PieceActorArray[Index] : nullptr)
+			{
+				Actor->PieceData = Piece;
+				Actor->UpdateAppearance();
+			}
+		}
+	}
+}
+
 void AShogiBoardManager::AdvanceTurn()
 {
 	if (AShogiGameState* GS = GetShogiGameState())
 	{
 		GS->CurrentTurn = (GS->CurrentTurn == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
+
+		TickTimedCardEffects(GS->CurrentTurn);
+
 		GS->bInCheck = IsKingInCheck(GS->CurrentTurn);
 
-		// Start CurrentTurn's card phase (see docs/2026-08-14-card-system-phase-a.md): draw a
-		// card into whichever controller currently plays that side, and require it to resolve
-		// (play a card or pass) before a move/drop is accepted. If nobody controls that side
-		// (the AI's side in AShogiSinglePlayerVsAIGameMode, which moves via ApplyMove/ApplyDrop
-		// directly rather than through a controller), auto-resolve so the AI isn't blocked.
-		GS->bCardPhaseResolved = false;
-		if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
-		{
-			if (AShogiPlayerController* PC = GM->GetControllerForSide(GS->CurrentTurn))
-			{
-				PC->DrawCardForSide(GS->CurrentTurn);
-			}
-			// If no controller exists for the new CurrentTurn (the AI's side in
-			// AShogiSinglePlayerVsAIGameMode), leave bCardPhaseResolved false here - the lazy
-			// check in ApplyMove/ApplyDrop resolves it the moment the AI's direct ApplyMove/
-			// ApplyDrop call arrives, without needing a controller to exist at this point in
-			// time (which may be before PostLogin has run, at initial BeginPlay).
-		}
+		StartCardPhaseForCurrentTurn();
 
 		GS->OnRep_CurrentTurn();
+	}
+}
+
+void AShogiBoardManager::StartCardPhaseForCurrentTurn()
+{
+	AShogiGameState* GS = GetShogiGameState();
+	if (!GS)
+	{
+		return;
+	}
+
+	// (Re)start CurrentTurn's card phase (see docs/2026-08-14-card-system-phase-a.md, hand
+	// mechanic revised per user request: redraw a fresh 3-card hand into whichever controller
+	// currently plays that side, and require it to resolve (play a card or pass) before a
+	// move/drop is accepted. If nobody controls that side (the AI's side in
+	// AShogiSinglePlayerVsAIGameMode, which moves via ApplyMove/ApplyDrop directly rather than
+	// through a controller), auto-resolve so the AI isn't blocked.
+	GS->bCardPhaseResolved = false;
+
+	// Any previous phase's timeout timer is no longer relevant (see
+	// docs/2026-08-14-card-system-phase-b.md 3.7).
+	GetWorldTimerManager().ClearTimer(CardPhaseTimerHandle);
+	GetWorldTimerManager().ClearTimer(MovePhaseTimerHandle);
+
+	if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
+	{
+		if (AShogiPlayerController* PC = GM->GetControllerForSide(GS->CurrentTurn))
+		{
+			PC->RedrawHandForSide(GS->CurrentTurn);
+			GetWorldTimerManager().SetTimer(CardPhaseTimerHandle, this, &AShogiBoardManager::HandleCardPhaseTimeout, CardPhaseTimeoutSeconds, false);
+			SetPhaseTimerEndTime(CardPhaseTimeoutSeconds);
+			return;
+		}
+	}
+
+	// No controller exists for CurrentTurn (the AI's side in AShogiSinglePlayerVsAIGameMode, or
+	// called before any controller has logged in) - leave bCardPhaseResolved false here; the
+	// lazy check in ApplyMove/ApplyDrop resolves it the moment the AI's direct ApplyMove/
+	// ApplyDrop call arrives. No timer is started - AShogiSinglePlayerVsAIGameMode's own
+	// MakeAIMove timer/flow already covers it, and there's no countdown to display for it either.
+	ClearPhaseTimerEndTime();
+}
+
+void AShogiBoardManager::OnCardPhaseResolved(EPlayerSide Side)
+{
+	GetWorldTimerManager().ClearTimer(CardPhaseTimerHandle);
+
+	if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
+	{
+		if (GM->GetControllerForSide(Side))
+		{
+			GetWorldTimerManager().SetTimer(MovePhaseTimerHandle, this, &AShogiBoardManager::HandleMovePhaseTimeout, MovePhaseTimeoutSeconds, false);
+			SetPhaseTimerEndTime(MovePhaseTimeoutSeconds);
+			return;
+		}
+	}
+
+	ClearPhaseTimerEndTime();
+}
+
+void AShogiBoardManager::SetPhaseTimerEndTime(float DurationSeconds)
+{
+	if (AShogiGameState* GS = GetShogiGameState())
+	{
+		GS->CurrentPhaseTimerEndTime = GS->GetServerWorldTimeSeconds() + DurationSeconds;
+	}
+}
+
+void AShogiBoardManager::ClearPhaseTimerEndTime()
+{
+	if (AShogiGameState* GS = GetShogiGameState())
+	{
+		GS->CurrentPhaseTimerEndTime = -1.f;
+	}
+}
+
+void AShogiBoardManager::HandleCardPhaseTimeout()
+{
+	AShogiGameState* GS = GetShogiGameState();
+	if (!GS || GS->bGameOver || GS->bCardPhaseResolved)
+	{
+		return;
+	}
+
+	if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
+	{
+		if (AShogiPlayerController* PC = GM->GetControllerForSide(GS->CurrentTurn))
+		{
+			PC->ForceRandomCardOrPass();
+		}
+	}
+}
+
+void AShogiBoardManager::HandleMovePhaseTimeout()
+{
+	AShogiGameState* GS = GetShogiGameState();
+	if (!GS || GS->bGameOver || !GS->bCardPhaseResolved)
+	{
+		return;
+	}
+
+	FShogiLegalAction Chosen;
+	if (!PickRandomLegalAction(GS->CurrentTurn, Chosen))
+	{
+		// Stalemate-equivalent - matches AShogiSinglePlayerVsAIGameMode::MakeAIMove's handling.
+		return;
+	}
+
+	if (Chosen.bIsDrop)
+	{
+		ApplyDrop(Chosen.To, Chosen.DropActor, Chosen.DropPieceType, GS->CurrentTurn);
+	}
+	else
+	{
+		ApplyMove(Chosen.From, Chosen.To, GS->CurrentTurn, /*bClientRequestedPromote=*/true);
 	}
 }
 
@@ -489,10 +645,269 @@ bool AShogiBoardManager::ApplyCardEffect(ECardType CardType, EPlayerSide Request
 			return true;
 		}
 
+		case ECardType::PetrifyCurse:
+		{
+			if (!UShogiCardEffectLibrary::IsValidPetrifyCurseTarget(BoardArray, RequestingSide, TargetBoardIndex))
+			{
+				return false;
+			}
+			UShogiCardEffectLibrary::ApplyPetrifyCurse(BoardArray, TargetBoardIndex);
+			if (AShogiPiece* Actor = PieceActorArray.IsValidIndex(TargetBoardIndex) ? PieceActorArray[TargetBoardIndex] : nullptr)
+			{
+				Actor->PieceData = BoardArray[TargetBoardIndex];
+				Actor->UpdateAppearance();
+			}
+			return true;
+		}
+
+		case ECardType::PositionSwap:
+		{
+			if (!UShogiCardEffectLibrary::IsValidPositionSwapTarget(BoardArray, RequestingSide, TargetBoardIndex))
+			{
+				return false;
+			}
+
+			int32 KingIndex = INDEX_NONE;
+			for (int32 Index = 0; Index < BoardArray.Num(); ++Index)
+			{
+				if (BoardArray[Index].PlayerSide == RequestingSide && BoardArray[Index].PieceType == EPieceType::Ou)
+				{
+					KingIndex = Index;
+					break;
+				}
+			}
+			if (KingIndex == INDEX_NONE || KingIndex == TargetBoardIndex)
+			{
+				return false;
+			}
+
+			UShogiCardEffectLibrary::ApplyPositionSwap(BoardArray, KingIndex, TargetBoardIndex);
+
+			if (PieceActorArray.IsValidIndex(KingIndex) && PieceActorArray.IsValidIndex(TargetBoardIndex))
+			{
+				AShogiPiece* KingActor = PieceActorArray[KingIndex];
+				AShogiPiece* FuActor = PieceActorArray[TargetBoardIndex];
+				PieceActorArray[KingIndex] = FuActor;
+				PieceActorArray[TargetBoardIndex] = KingActor;
+
+				if (KingActor)
+				{
+					KingActor->PieceData = BoardArray[TargetBoardIndex];
+					KingActor->SetActorLocation(GetWorldLocationForIndex(TargetBoardIndex));
+					KingActor->UpdateAppearance();
+				}
+				if (FuActor)
+				{
+					FuActor->PieceData = BoardArray[KingIndex];
+					FuActor->SetActorLocation(GetWorldLocationForIndex(KingIndex));
+					FuActor->UpdateAppearance();
+				}
+			}
+			return true;
+		}
+
+		case ECardType::MegatonImpact:
+		{
+			if (!UShogiCardEffectLibrary::IsValidMegatonImpactTarget(BoardArray, TargetBoardIndex))
+			{
+				return false;
+			}
+
+			AShogiPiece* Actor = PieceActorArray.IsValidIndex(TargetBoardIndex) ? PieceActorArray[TargetBoardIndex] : nullptr;
+			const int32 NewIndex = UShogiCardEffectLibrary::ApplyMegatonImpact(BoardArray, TargetBoardIndex);
+
+			if (NewIndex != TargetBoardIndex)
+			{
+				PieceActorArray[TargetBoardIndex] = nullptr;
+				PieceActorArray[NewIndex] = Actor;
+				if (Actor)
+				{
+					Actor->PieceData = BoardArray[NewIndex];
+					Actor->SetActorLocation(GetWorldLocationForIndex(NewIndex));
+					Actor->UpdateAppearance();
+				}
+			}
+			// Still counts as a used card even if fully blocked (0-square knockback) - see
+			// docs/2026-08-14-card-system-phase-b.md 2.4.
+			return true;
+		}
+
+		case ECardType::SelfDestructBomb:
+		{
+			if (!UShogiCardEffectLibrary::IsValidSelfDestructBombTarget(BoardArray, RequestingSide, TargetBoardIndex))
+			{
+				return false;
+			}
+
+			int32 CenterX, CenterY;
+			UShogiRulesLibrary::IndexToXY(TargetBoardIndex, CenterX, CenterY);
+
+			TArray<int32> BlastIndices;
+			BlastIndices.Add(TargetBoardIndex);
+			for (int32 DX = -1; DX <= 1; ++DX)
+			{
+				for (int32 DY = -1; DY <= 1; ++DY)
+				{
+					if (DX == 0 && DY == 0)
+					{
+						continue;
+					}
+					const int32 NeighborX = CenterX + DX;
+					const int32 NeighborY = CenterY + DY;
+					if (NeighborX < 0 || NeighborX >= UShogiRulesLibrary::BoardDimension
+						|| NeighborY < 0 || NeighborY >= UShogiRulesLibrary::BoardDimension)
+					{
+						continue;
+					}
+					const int32 NeighborIndex = UShogiRulesLibrary::XYToIndex(NeighborX, NeighborY);
+					if (BoardArray[NeighborIndex].PlayerSide != EPlayerSide::None && !BoardArray[NeighborIndex].bIsInvincible)
+					{
+						BlastIndices.Add(NeighborIndex);
+					}
+				}
+			}
+
+			bool bSenteKingDestroyed = false;
+			bool bGoteKingDestroyed = false;
+
+			for (int32 Index : BlastIndices)
+			{
+				const FShogiPieceData& Victim = BoardArray[Index];
+				if (Victim.PieceType == EPieceType::Ou)
+				{
+					if (Victim.PlayerSide == EPlayerSide::Sente)
+					{
+						bSenteKingDestroyed = true;
+					}
+					else if (Victim.PlayerSide == EPlayerSide::Gote)
+					{
+						bGoteKingDestroyed = true;
+					}
+				}
+
+				if (AShogiPiece* Actor = PieceActorArray.IsValidIndex(Index) ? PieceActorArray[Index] : nullptr)
+				{
+					Actor->Destroy();
+				}
+				PieceActorArray[Index] = nullptr;
+				BoardArray[Index] = FShogiPieceData();
+			}
+
+			if (bSenteKingDestroyed || bGoteKingDestroyed)
+			{
+				GS->bGameOver = true;
+				if (bSenteKingDestroyed && bGoteKingDestroyed)
+				{
+					// Both Kings caught in the same blast - see docs/2026-08-14-card-system-phase-b.md 2.5.
+					GS->Winner = EPlayerSide::None;
+				}
+				else
+				{
+					GS->Winner = bSenteKingDestroyed ? EPlayerSide::Gote : EPlayerSide::Sente;
+				}
+				GS->OnRep_GameOver();
+				GetWorldTimerManager().ClearTimer(CardPhaseTimerHandle);
+				GetWorldTimerManager().ClearTimer(MovePhaseTimerHandle);
+				ClearPhaseTimerEndTime();
+			}
+
+			return true;
+		}
+
+		case ECardType::TemporaryInvincibility:
+		{
+			if (!UShogiCardEffectLibrary::IsValidTemporaryInvincibilityTarget(BoardArray, RequestingSide, TargetBoardIndex))
+			{
+				return false;
+			}
+			UShogiCardEffectLibrary::ApplyTemporaryInvincibility(BoardArray, TargetBoardIndex);
+			if (AShogiPiece* Actor = PieceActorArray.IsValidIndex(TargetBoardIndex) ? PieceActorArray[TargetBoardIndex] : nullptr)
+			{
+				Actor->PieceData = BoardArray[TargetBoardIndex];
+				Actor->UpdateAppearance();
+			}
+			return true;
+		}
+
+		case ECardType::RentalReservation:
+		{
+			if (!UShogiCardEffectLibrary::IsValidRentalReservationTarget(BoardArray, RequestingSide, TargetBoardIndex))
+			{
+				return false;
+			}
+			BoardArray[TargetBoardIndex].PendingLoanCasterSide = RequestingSide;
+			BoardArray[TargetBoardIndex].PendingLoanTurnsElapsed = 0;
+			if (AShogiPiece* Actor = PieceActorArray.IsValidIndex(TargetBoardIndex) ? PieceActorArray[TargetBoardIndex] : nullptr)
+			{
+				// No appearance change - the reservation is invisible until it activates
+				// (see AShogiBoardManager::AdvanceTurn).
+				Actor->PieceData = BoardArray[TargetBoardIndex];
+			}
+			return true;
+		}
+
 		default:
-			// Phase B cards have no effect logic yet.
 			return false;
 	}
+}
+
+bool AShogiBoardManager::PickRandomLegalAction(EPlayerSide Side, FShogiLegalAction& OutAction) const
+{
+	TArray<FShogiLegalAction> Options;
+
+	for (int32 Index = 0; Index < BoardArray.Num(); ++Index)
+	{
+		const FShogiPieceData& Piece = BoardArray[Index];
+		if (Piece.PlayerSide != Side)
+		{
+			continue;
+		}
+
+		UDataTable* MoveTable = GetMoveDataTableFor(Piece);
+		const TArray<int32> Movable = UShogiRulesLibrary::GetMovableIndices(BoardArray, Piece, Index, MoveTable);
+		for (int32 To : Movable)
+		{
+			FShogiLegalAction Option;
+			Option.From = Index;
+			Option.To = To;
+			Options.Add(Option);
+		}
+	}
+
+	const TArray<TObjectPtr<AShogiPiece>>& HandActors = (Side == EPlayerSide::Sente) ? HandPieceActors_Sente : HandPieceActors_Gote;
+	for (AShogiPiece* HandActor : HandActors)
+	{
+		if (!HandActor)
+		{
+			continue;
+		}
+		for (int32 Index = 0; Index < BoardArray.Num(); ++Index)
+		{
+			if (BoardArray[Index].PlayerSide != EPlayerSide::None)
+			{
+				continue;
+			}
+			if (HandActor->PieceData.PieceType == EPieceType::Fu && UShogiRulesLibrary::IsNifuViolation(BoardArray, Side, Index))
+			{
+				continue;
+			}
+
+			FShogiLegalAction Option;
+			Option.bIsDrop = true;
+			Option.To = Index;
+			Option.DropActor = HandActor;
+			Option.DropPieceType = HandActor->PieceData.PieceType;
+			Options.Add(Option);
+		}
+	}
+
+	if (Options.Num() == 0)
+	{
+		return false;
+	}
+
+	OutAction = Options[FMath::RandRange(0, Options.Num() - 1)];
+	return true;
 }
 
 bool AShogiBoardManager::IsKingInCheck(EPlayerSide Side) const
@@ -586,6 +1001,13 @@ void AShogiBoardManager::ApplyMove(int32 From, int32 To, EPlayerSide RequestingS
 		return;
 	}
 
+	if (TargetCell.PlayerSide != EPlayerSide::None && TargetCell.bIsInvincible)
+	{
+		// Temporary Invincibility (see docs/2026-08-14-card-system-phase-b.md): this square's
+		// occupant cannot be captured right now, so the move itself is illegal.
+		return;
+	}
+
 	const bool bCapturedKing = (TargetCell.PieceType == EPieceType::Ou);
 
 	// Capture.
@@ -594,6 +1016,12 @@ void AShogiBoardManager::ApplyMove(int32 From, int32 To, EPlayerSide RequestingS
 		FShogiPieceData Captured = TargetCell;
 		Captured.PlayerSide = MovingPiece.PlayerSide; // ownership flips to the capturing side
 		Captured.bIsPromoted = false; // captured pieces always return to hand unpromoted
+		// Rental Reservation (see docs/2026-08-14-card-system-phase-b.md 2.1): a pending or
+		// active loan vanishes once the piece is captured, regardless of by whom.
+		Captured.PendingLoanCasterSide = EPlayerSide::None;
+		Captured.PendingLoanTurnsElapsed = 0;
+		Captured.bLoanActive = false;
+		Captured.LoanOriginalOwnerSide = EPlayerSide::None;
 
 		AShogiPiece* CapturedActor = PieceActorArray[To];
 		if (CapturedActor)
@@ -669,6 +1097,9 @@ void AShogiBoardManager::ApplyMove(int32 From, int32 To, EPlayerSide RequestingS
 			GS->Winner = MovingPiece.PlayerSide;
 			GS->OnRep_GameOver();
 		}
+		GetWorldTimerManager().ClearTimer(CardPhaseTimerHandle);
+		GetWorldTimerManager().ClearTimer(MovePhaseTimerHandle);
+		ClearPhaseTimerEndTime();
 	}
 	else
 	{

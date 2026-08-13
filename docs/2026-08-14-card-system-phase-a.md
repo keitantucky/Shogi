@@ -34,8 +34,7 @@
 残り6種（貸し出し予約・石化の呪い・位置シャッフル・メガトンインパクト・道連れボム・一時無敵）と15秒ターンタイマーはPhase B以降に実装する。
 
 ### 2.2 山札・手札
-- 各プレイヤーがそれぞれ30枚の山札を持つ（中身は同一構成）。Phase Aは実装済み4種のみなので **歩兵ロケット8／ハイエナ8／即時覚醒7／天変地異7 = 30枚** に拡張した構成で埋める。Phase Bでカード種が増えたら比率を再調整する。
-- 対局開始時に初期手札3枚を配布。以降、毎ターン開始時に1枚ドロー。手札が既に上限（3枚）ならドローしない（スキップ、捨て札は発生しない）。
+- **（Phase B完了後に変更）** 山札は実質無限。対局開始時、および以降毎ターン開始時に、実装済み全カード種（Phase B完了時点で10種）からランダムに3枚を選び直し、手札をまるごと入れ替える（引き直し）。前ターンに使わなかった残りの手札は破棄され、捨て札という概念もない。手札上限や段階的ドローは廃止。
 - 自分の手札は自分にしか見えない（オンライン対戦で相手に非公開）。ホットシート/CPU対戦は1人プレイのため実質影響なし。
 
 ### 2.3 ターン内フローの強制
@@ -124,9 +123,8 @@ bool bHasFuRocketBoost = false;
 
 ### 3.5 `AShogiPlayerController`
 - 新規メンバ`CardState_Sente` / `CardState_Gote`（`FShogiCardHandState`、`UPROPERTY(ReplicatedUsing = OnRep_CardState_Sente 等)`、`DOREPLIFETIME_CONDITION(..., COND_OwnerOnly)`）。ホットシート（`bControlBothSides`）では1つのコントローラーが両方を保持して使う。通常オンライン対戦では自分の`PlayerSide`側だけが使われ、もう一方は空のまま（レプリケートされても実害なし）。
-- 非レプリケート・サーバー専用の`TArray<ECardType> Deck_Sente;` / `Deck_Gote;`。
-- `BeginPlay()`で`HasAuthority()`なら両サイド分の山札（8/8/7/7構成）をシャッフルして構築し、初期手札3枚を配る。
-- `void DrawCardForSide(EPlayerSide Side)`（`AdvanceTurn`から呼ばれるプレーン関数）: 手札が3枚未満ならデッキ先頭から1枚引く。デッキが空なら何もしない。
+- **（Phase B完了後に変更）** 有限の山札配列は廃止。`BeginPlay()`で`HasAuthority()`なら両サイドの初期手札を`RedrawHandForSide`で配る。
+- `void RedrawHandForSide(EPlayerSide Side)`（`AdvanceTurn`から呼ばれるプレーン関数）: 手札を空にし、実装済み全カード種からランダムに3枚選んで入れ替える（山札は実質無限のため、抽選元は固定の10種配列で済み、在庫管理は不要）。
 - Server RPC `Server_RequestPlayCard(ECardType CardType, int32 TargetBoardIndex, AShogiPiece* TargetHandPieceActor)`: `GetControllableSide()`を要求側とし、手札に該当カードがあるか確認した上で`BoardManager->ApplyCardEffect(...)`を呼ぶ。成功したら手札から1枚除去し`GameState->bCardPhaseResolved = true`にする。
 - Server RPC `Server_PassCardPhase()`: 自分のターンかつ未解決なら`bCardPhaseResolved = true`にする。
 - `BlueprintPure`な`GetMyHand()` / `IsCardPlayable(ECardType)`をUIバインド用に公開する。

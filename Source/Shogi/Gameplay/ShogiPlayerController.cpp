@@ -528,8 +528,13 @@ void AShogiPlayerController::Server_PassCardPhase_Implementation()
 {
 	AShogiGameState* GS = GetOrFindGameState();
 	AShogiBoardManager* BM = GetOrFindBoardManager();
-	if (!GS || GS->bGameOver || GS->CurrentTurn != GetControllableSide())
+	if (!GS || GS->bGameOver || GS->CurrentTurn != GetControllableSide() || GS->bCardPhaseResolved)
 	{
+		// bCardPhaseResolved already true means the card phase is over (a card was played, a
+		// pass already went through, or the timeout forced one of those) and the move/piece-
+		// selection phase's own 15-second timer is running instead - without this check, a
+		// stray extra Pass click here would call BM->OnCardPhaseResolved again and wrongly
+		// restart that timer back to a fresh 15 seconds.
 		return;
 	}
 

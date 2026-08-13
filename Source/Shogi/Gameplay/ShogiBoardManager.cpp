@@ -564,6 +564,15 @@ bool AShogiBoardManager::ApplyCardEffect(ECardType CardType, EPlayerSide Request
 
 	const EPlayerSide OpponentSide = (RequestingSide == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
 
+	// Wrapped in an immediately-invoked lambda (rather than touching every "return true"/
+	// "return false" below individually) so that ANY successful card effect - not just
+	// TenpenChii - gets AShogiGameState::bInCheck recomputed afterward. Several Phase B cards
+	// change the board without a piece "moving" in the usual sense (InstantAwakening changes a
+	// piece's move pattern in place, PetrifyCurse/PositionSwap/MegatonImpact/SelfDestructBomb
+	// reposition or remove pieces), any of which can open, close, or resolve a check - unlike
+	// AdvanceTurn, ApplyCardEffect has no later automatic recompute for this turn.
+	const bool bApplied = [&]() -> bool
+	{
 	switch (CardType)
 	{
 		case ECardType::FuRocket:
@@ -607,7 +616,6 @@ bool AShogiBoardManager::ApplyCardEffect(ECardType CardType, EPlayerSide Request
 					Actor->UpdateAppearance();
 				}
 			}
-			GS->bInCheck = IsKingInCheck(GS->CurrentTurn);
 			return true;
 		}
 
@@ -849,6 +857,14 @@ bool AShogiBoardManager::ApplyCardEffect(ECardType CardType, EPlayerSide Request
 		default:
 			return false;
 	}
+	}();
+
+	if (bApplied && !GS->bGameOver)
+	{
+		GS->bInCheck = IsKingInCheck(GS->CurrentTurn);
+	}
+
+	return bApplied;
 }
 
 bool AShogiBoardManager::PickRandomLegalAction(EPlayerSide Side, FShogiLegalAction& OutAction) const

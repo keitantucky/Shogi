@@ -24,6 +24,10 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_CurrentTurn, BlueprintReadOnly, Category = "Shogi")
 	EPlayerSide CurrentTurn = EPlayerSide::Sente;
 
+	/** True if CurrentTurn's King is currently attacked (王手). Display-only, see AShogiBoardManager::IsKingInCheck. */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
+	bool bInCheck = false;
+
 	UPROPERTY(BlueprintAssignable, Category = "Shogi")
 	FOnShogiTurnChanged OnTurnChanged;
 

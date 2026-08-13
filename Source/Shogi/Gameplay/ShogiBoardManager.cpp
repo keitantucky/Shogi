@@ -340,8 +340,49 @@ void AShogiBoardManager::AdvanceTurn()
 	if (AShogiGameState* GS = GetShogiGameState())
 	{
 		GS->CurrentTurn = (GS->CurrentTurn == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
+		GS->bInCheck = IsKingInCheck(GS->CurrentTurn);
 		GS->OnRep_CurrentTurn();
 	}
+}
+
+bool AShogiBoardManager::IsKingInCheck(EPlayerSide Side) const
+{
+	if (Side == EPlayerSide::None)
+	{
+		return false;
+	}
+
+	int32 KingIndex = INDEX_NONE;
+	for (int32 Index = 0; Index < BoardArray.Num(); ++Index)
+	{
+		if (BoardArray[Index].PlayerSide == Side && BoardArray[Index].PieceType == EPieceType::Ou)
+		{
+			KingIndex = Index;
+			break;
+		}
+	}
+	if (KingIndex == INDEX_NONE)
+	{
+		return false;
+	}
+
+	const EPlayerSide EnemySide = (Side == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
+	for (int32 Index = 0; Index < BoardArray.Num(); ++Index)
+	{
+		const FShogiPieceData& Piece = BoardArray[Index];
+		if (Piece.PlayerSide != EnemySide)
+		{
+			continue;
+		}
+
+		UDataTable* MoveTable = GetMoveDataTableFor(Piece);
+		if (UShogiRulesLibrary::GetMovableIndices(BoardArray, Piece, Index, MoveTable).Contains(KingIndex))
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 void AShogiBoardManager::ApplyMove(int32 From, int32 To, EPlayerSide RequestingSide, bool bClientRequestedPromote)

@@ -142,6 +142,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Shogi")
 	void ApplyDrop(int32 DropIndex, AShogiPiece* DropPieceActor, EPieceType DropPieceType, EPlayerSide RequestingSide);
 
+	/**
+	 * True if any of Side's opponent's pieces could currently move onto Side's King
+	 * square (i.e. Side is in check). Display-only (see docs/GameSpec.md - this does not
+	 * restrict move legality, so moves that ignore or walk into check are still allowed).
+	 */
+	UFUNCTION(BlueprintPure, Category = "Shogi")
+	bool IsKingInCheck(EPlayerSide Side) const;
+
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:

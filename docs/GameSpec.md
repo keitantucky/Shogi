@@ -101,9 +101,12 @@
 - `AShogiPlayerController::HandleLeftClick()`も終局後はクリック自体を無視する
 - `UShogiTurnWidgetBase::GetCurrentTurnText()`が終局時に`"Sente wins!"`/`"Gote wins!"`を表示する(既存のTextバインドをそのまま使い回せる)
 
+### 9.1.1 王手表示(表示のみ、実装済み)
+`AShogiBoardManager::IsKingInCheck(Side)`が、Sideの玉の位置に敵駒のいずれかが到達可能(`UShogiRulesLibrary::GetMovableIndices`)かどうかで王手を判定する。`AdvanceTurn()`が手番交代のたびに次の手番側についてこれを呼び、結果を`AShogiGameState::bInCheck`(レプリケート)に保存する。`UShogiTurnWidgetBase::GetCurrentTurnText()`が`bInCheck`のとき`"Sente - Check!"`/`"Gote - Check!"`を表示する。**判定のみで、王手放置や自殺手を防ぐ機能はない**(§9.2参照)。
+
 ### 9.2 スコープ外(今回は実装しない)
 
-- **本格的な王手(check)・詰み(checkmate)判定**(現状は王を取られるまで反則手も含めて指し続けられる。自分の王が王手されている状態で放置する手や、相手の駒を取れば普通に取られてしまう王手放置も許容される)
+- **詰み(checkmate)判定・王手放置の禁止**(王手の表示自体は§9.1.1で実装したが、自分の王が王手されている状態のまま別の手を指すことや、相手の駒を取れば普通に取られてしまう王手放置は引き続き許容される。合法手をその都度王手放置にならないよう絞り込む処理は未実装)
 - **禁じ手ルール**: 二歩、打ち歩詰め、行き所のない駒(打つ際の制限)
 - オンライン対戦基盤(EOSCore, ロビー, フレンドUI, タイトル画面)・メニューUIはBlueprintのまま変更していない
 - カメラ(`BP_SenteCamera`/`BP_GoteCamera`)・移動先マーカー(`BP_MoveTileMarker`)は見た目のみでロジックを持たないためBlueprintのまま。`AShogiBoardManager::MoveMarkerClass`・`AShogiPlayerController::GoteCameraClass`/`SenteCameraClass`から`TSubclassOf`で参照する

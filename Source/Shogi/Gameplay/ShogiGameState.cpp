@@ -18,6 +18,7 @@ void AShogiGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AShogiGameState, CurrentTurn);
+	DOREPLIFETIME(AShogiGameState, bInCheck);
 	DOREPLIFETIME(AShogiGameState, bGameOver);
 	DOREPLIFETIME(AShogiGameState, Winner);
 }

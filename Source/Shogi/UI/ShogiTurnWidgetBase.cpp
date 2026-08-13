@@ -27,9 +27,9 @@ FText UShogiTurnWidgetBase::GetCurrentTurnText() const
 	switch (GS->CurrentTurn)
 	{
 		case EPlayerSide::Sente:
-			return FText::FromString(TEXT("Sente"));
+			return FText::FromString(GS->bInCheck ? TEXT("Sente - Check!") : TEXT("Sente"));
 		case EPlayerSide::Gote:
-			return FText::FromString(TEXT("Gote"));
+			return FText::FromString(GS->bInCheck ? TEXT("Gote - Check!") : TEXT("Gote"));
 		default:
 			return FText::GetEmpty();
 	}

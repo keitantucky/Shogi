@@ -78,4 +78,16 @@ public:
 		const FShogiPieceData& SelectedPiece,
 		int32 FromIndex,
 		UDataTable* MoveDataTable);
+
+	/**
+	 * 二歩(nifu): true if Side already has an unpromoted Fu on DropIndex's file (column),
+	 * making it illegal to drop another Fu there. A promoted Fu (と金) does not count.
+	 * Only meaningful when the piece being dropped is a Fu - callers should not call this
+	 * for other piece types.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Shogi|Rules")
+	static bool IsNifuViolation(
+		const TArray<FShogiPieceData>& BoardArray,
+		EPlayerSide Side,
+		int32 DropIndex);
 };

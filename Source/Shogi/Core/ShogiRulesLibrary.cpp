@@ -155,3 +155,28 @@ TArray<int32> UShogiRulesLibrary::GetMovableIndices(
 
 	return MovableList;
 }
+
+bool UShogiRulesLibrary::IsNifuViolation(
+	const TArray<FShogiPieceData>& BoardArray,
+	EPlayerSide Side,
+	int32 DropIndex)
+{
+	if (!IsValidBoardIndex(DropIndex))
+	{
+		return false;
+	}
+
+	int32 DropX, DropY;
+	IndexToXY(DropIndex, DropX, DropY);
+
+	for (int32 Y = 0; Y < BoardDimension; ++Y)
+	{
+		const FShogiPieceData& Piece = BoardArray[XYToIndex(DropX, Y)];
+		if (Piece.PlayerSide == Side && Piece.PieceType == EPieceType::Fu && !Piece.bIsPromoted)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}

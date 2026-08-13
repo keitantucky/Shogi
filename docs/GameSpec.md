@@ -55,6 +55,7 @@
 
 - 持ち駒は`HandPieceActors_Sente`/`HandPieceActors_Gote`(配列)と対応する`CapturedPieces_*`配列で管理し、`SenteKomadai`/`GoteKomadai`(`USceneComponent`、駒台の基準位置)周りに`UpdateStandLayout()`でレイアウトする
 - `AShogiBoardManager::ApplyDrop()`が打つ処理を行う。**打った駒は常に不成り**(`bIsPromoted=false`固定)
+- **二歩(実装済み)**: `UShogiRulesLibrary::IsNifuViolation(BoardArray, Side, DropIndex)`が、DropIndexの筋(列)にSideの不成り歩が既にあるかどうかを判定する(成り歩=と金はカウントしない)。`ApplyDrop()`が歩を打つ場合にサーバー側で必ずこれをチェックし、違反時はドロップを拒否する。`AShogiPlayerController::HandleLeftClick()`側でも、歩の持ち駒を選択した際の移動先マーカー候補から二歩になる筋を除外する(表示上の一致のため。合法性の最終判定は常にサーバー側)
 
 ## 7. 成り(昇格)
 
@@ -107,7 +108,7 @@
 ### 9.2 スコープ外(今回は実装しない)
 
 - **詰み(checkmate)判定・王手放置の禁止**(王手の表示自体は§9.1.1で実装したが、自分の王が王手されている状態のまま別の手を指すことや、相手の駒を取れば普通に取られてしまう王手放置は引き続き許容される。合法手をその都度王手放置にならないよう絞り込む処理は未実装)
-- **禁じ手ルール**: 二歩、打ち歩詰め、行き所のない駒(打つ際の制限)
+- **禁じ手ルール**: 打ち歩詰め、行き所のない駒(打つ際の制限)。二歩は§6で実装済み
 - オンライン対戦基盤(EOSCore, ロビー, フレンドUI, タイトル画面)・メニューUIはBlueprintのまま変更していない
 - カメラ(`BP_SenteCamera`/`BP_GoteCamera`)・移動先マーカー(`BP_MoveTileMarker`)は見た目のみでロジックを持たないためBlueprintのまま。`AShogiBoardManager::MoveMarkerClass`・`AShogiPlayerController::GoteCameraClass`/`SenteCameraClass`から`TSubclassOf`で参照する
 - 元の`BP_MyPlayerController`が`BeginPlay`で生成していた`WBP_Login`/`WBP_Main`(EOSCoreセッション/メニュー用ウィジェット)は、新しい`AShogiPlayerController`では生成しない(オンライン対戦基盤はスコープ外のため)。必要な場合はユーザー側で別途対応が必要

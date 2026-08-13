@@ -544,6 +544,12 @@ void AShogiBoardManager::ApplyDrop(int32 DropIndex, AShogiPiece* DropPieceActor,
 		return;
 	}
 
+	if (DropPieceType == EPieceType::Fu && UShogiRulesLibrary::IsNifuViolation(BoardArray, RequestingSide, DropIndex))
+	{
+		// 二歩: can't drop a second unpromoted Fu onto a file that already has one.
+		return;
+	}
+
 	TArray<FShogiPieceData>& CapturedPieces = (RequestingSide == EPlayerSide::Sente) ? CapturedPieces_Sente : CapturedPieces_Gote;
 	TArray<TObjectPtr<AShogiPiece>>& HandActors = (RequestingSide == EPlayerSide::Sente) ? HandPieceActors_Sente : HandPieceActors_Gote;
 

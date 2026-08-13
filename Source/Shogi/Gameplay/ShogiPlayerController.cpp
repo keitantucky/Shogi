@@ -142,11 +142,30 @@ void AShogiPlayerController::HandleLeftClick()
 		CurrentMovableList.Reset();
 		for (int32 Index = 0; Index < BoardManager->BoardArray.Num(); ++Index)
 		{
-			if (BoardManager->BoardArray[Index].PlayerSide == EPlayerSide::None)
+			if (BoardManager->BoardArray[Index].PlayerSide != EPlayerSide::None)
 			{
-				CurrentMovableList.Add(Index);
+				continue;
 			}
+			if (SelectedHandPieceType == EPieceType::Fu
+				&& UShogiRulesLibrary::IsNifuViolation(BoardManager->BoardArray, GetControllableSide(), Index))
+			{
+				// 二歩: don't offer this file as a drop target for a second unpromoted Fu.
+				continue;
+			}
+			CurrentMovableList.Add(Index);
 		}
+
+		UE_LOG(LogTemp, Warning, TEXT("[ShogiDebug] Hand piece selected: Type=%s Side=%s -> %d droppable squares"),
+			*UEnum::GetValueAsString(SelectedHandPieceType),
+			*UEnum::GetValueAsString(GetControllableSide()),
+			CurrentMovableList.Num());
+		for (int32 DropIdx : CurrentMovableList)
+		{
+			int32 DropX, DropY;
+			UShogiRulesLibrary::IndexToXY(DropIdx, DropX, DropY);
+			UE_LOG(LogTemp, Warning, TEXT("[ShogiDebug]     -> Index=%d (X=%d, Y=%d)"), DropIdx, DropX, DropY);
+		}
+
 		BoardManager->ShowMoveMarkers(CurrentMovableList);
 		return;
 	}

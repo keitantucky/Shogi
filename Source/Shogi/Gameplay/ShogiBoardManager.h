@@ -5,11 +5,39 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "ShogiTypes.h"
+#include "ShogiCardTypes.h"
 #include "ShogiBoardManager.generated.h"
 
 class AShogiPiece;
 class UDataTable;
 class USceneComponent;
+
+/**
+ * One candidate move or drop, as enumerated by AShogiBoardManager::PickRandomLegalAction.
+ * Shared by AShogiSinglePlayerVsAIGameMode::MakeAIMove and
+ * AShogiBoardManager::HandleMovePhaseTimeout (see docs/2026-08-14-card-system-phase-b.md 3.8)
+ * so both pick from the exact same "every legal move/drop for Side" pool via one function.
+ */
+USTRUCT()
+struct FShogiLegalAction
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bIsDrop = false;
+
+	UPROPERTY()
+	int32 From = INDEX_NONE;
+
+	UPROPERTY()
+	int32 To = INDEX_NONE;
+
+	UPROPERTY()
+	TObjectPtr<AShogiPiece> DropActor = nullptr;
+
+	UPROPERTY()
+	EPieceType DropPieceType = EPieceType::None;
+};
 
 /**
  * Native replacement for the Blueprint Actor BP_BoardManager. Owns the authoritative
@@ -143,6 +171,47 @@ public:
 	void ApplyDrop(int32 DropIndex, AShogiPiece* DropPieceActor, EPieceType DropPieceType, EPlayerSide RequestingSide);
 
 	/**
+	 * Server-authoritative card-effect application (see docs/2026-08-14-card-system-phase-a.md).
+	 * Must only be called on the server, from AShogiPlayerController::Server_RequestPlayCard_
+	 * Implementation. Re-validates turn/card-phase/target legality itself rather than trusting
+	 * the caller. TargetBoardIndex is used by FuRocket/InstantAwakening, TargetHandPieceActor
+	 * by Hyena (must be one of the opponent's captured-piece actors); both are ignored by
+	 * cards that need neither (TenpenChii). Returns true only if the effect was actually
+	 * applied - the caller (PlayerController) removes the card from hand and resolves the
+	 * card phase only on a true return.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Shogi")
+	bool ApplyCardEffect(ECardType CardType, EPlayerSide RequestingSide, int32 TargetBoardIndex, AShogiPiece* TargetHandPieceActor);
+
+	/**
+	 * Uniformly-random pick among every currently legal move/drop for Side (board moves via
+	 * GetMovableIndices, hand-piece drops onto any empty, non-nifu-violating square) - the same
+	 * pool AShogiSinglePlayerVsAIGameMode::MakeAIMove and the 15-second move-phase timeout
+	 * (see docs/2026-08-14-card-system-phase-b.md 3.7/3.8) choose from. Returns false (OutAction
+	 * left default) if Side has no legal move or drop at all.
+	 */
+	bool PickRandomLegalAction(EPlayerSide Side, FShogiLegalAction& OutAction) const;
+
+	/**
+	 * Called by AShogiPlayerController whenever Side's card phase becomes resolved (a card was
+	 * played, a pass was requested, or the timeout forced one of those) - see
+	 * docs/2026-08-14-card-system-phase-b.md 3.7. Clears the card-phase timeout timer and, only
+	 * if a controller actually plays Side (AShogiGameMode::GetControllerForSide), starts the
+	 * 15-second move-phase timeout. Safe to call even when nothing was running.
+	 */
+	void OnCardPhaseResolved(EPlayerSide Side);
+
+	/**
+	 * Resets and (re)starts CurrentTurn's card phase: redraws that side's hand and starts the
+	 * 15-second card-phase timeout, or clears any countdown if nobody controls that side (the
+	 * AI's side in AShogiSinglePlayerVsAIGameMode). Called by AdvanceTurn after every
+	 * subsequent turn change, and once by AShogiGameMode::TryStartInitialCardPhase to cover the
+	 * very first turn (Sente's, at game start), which AdvanceTurn itself never runs for since
+	 * it only fires after a move completes. See docs/2026-08-14-card-system-phase-b.md 3.7.
+	 */
+	void StartCardPhaseForCurrentTurn();
+
+	/**
 	 * True if any of Side's opponent's pieces could currently move onto Side's King
 	 * square (i.e. Side is in check). Display-only (see docs/GameSpec.md - this does not
 	 * restrict move legality, so moves that ignore or walk into check are still allowed).
@@ -173,6 +242,43 @@ private:
 
 	AShogiPiece* SpawnPieceActor(const FShogiPieceData& PieceData, int32 BoardIndex);
 	void AdvanceTurn();
+
+	/**
+	 * Called once per AdvanceTurn, right after CurrentTurn flips to NewCurrentTurn: clears
+	 * expired Temporary Invincibility and ticks/activates/reverts Rental Reservation for every
+	 * board piece. See docs/2026-08-14-card-system-phase-b.md 3.6.
+	 */
+	void TickTimedCardEffects(EPlayerSide NewCurrentTurn);
+
+	/**
+	 * True if Side's card phase is (now) resolved and a move/drop may proceed. If
+	 * GS->bCardPhaseResolved is already true, returns true immediately. Otherwise, looks up
+	 * whether any controller currently plays Side (AShogiGameMode::GetControllerForSide) - if
+	 * not (the AI's side in AShogiSinglePlayerVsAIGameMode, or the very first turn evaluated
+	 * before any controller has logged in), latches bCardPhaseResolved=true and returns true;
+	 * if a controller does exist, returns false (that controller must call
+	 * Server_RequestPlayCard/Server_PassCardPhase first). See docs/2026-08-14-card-system-phase-a.md.
+	 */
+	bool ResolveCardPhaseIfUncontrolled(class AShogiGameState* GS, EPlayerSide Side);
 	class AShogiGameState* GetShogiGameState() const;
 	static void DebugLogTableContents(UDataTable* Table, const FString& Label);
+
+	/** See docs/2026-08-14-card-system-phase-b.md 3.7. Only ever started when a controller plays the relevant side. */
+	static constexpr float CardPhaseTimeoutSeconds = 15.f;
+	static constexpr float MovePhaseTimeoutSeconds = 15.f;
+
+	FTimerHandle CardPhaseTimerHandle;
+	FTimerHandle MovePhaseTimerHandle;
+
+	/** Fires when CardPhaseTimerHandle expires: forces CurrentTurn's controller to play a random card or pass. */
+	void HandleCardPhaseTimeout();
+
+	/** Fires when MovePhaseTimerHandle expires: applies a uniformly-random legal move/drop for CurrentTurn. */
+	void HandleMovePhaseTimeout();
+
+	/** Stamps AShogiGameState::CurrentPhaseTimerEndTime so clients can render a synced countdown (see docs/2026-08-14-card-system-phase-b.md 3.7, revised). */
+	void SetPhaseTimerEndTime(float DurationSeconds);
+
+	/** Sets AShogiGameState::CurrentPhaseTimerEndTime back to -1 (no countdown to display). */
+	void ClearPhaseTimerEndTime();
 };

@@ -28,6 +28,31 @@ public:
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
 	bool bInCheck = false;
 
+	/**
+	 * True once CurrentTurn's side has resolved its card phase this turn (played a card or
+	 * passed) - see docs/2026-08-14-card-system-phase-a.md. AShogiBoardManager::ApplyMove/
+	 * ApplyDrop reject requests while this is false, enforcing "play a card (or pass) before
+	 * moving". Reset to false by AShogiBoardManager::AdvanceTurn whenever CurrentTurn changes.
+	 * Shared/public information (not hand contents), so no COND_OwnerOnly is needed.
+	 */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
+	bool bCardPhaseResolved = false;
+
+	/**
+	 * Server-clock (GetServerWorldTimeSeconds) timestamp at which the current card-phase or
+	 * move-phase 15-second timeout will fire (see docs/2026-08-14-card-system-phase-b.md 3.7).
+	 * -1 means no timer is currently running (e.g. it's the CPU-controlled AI's turn). Set by
+	 * AShogiBoardManager whenever it starts/stops CardPhaseTimerHandle/MovePhaseTimerHandle.
+	 * GetServerWorldTimeSeconds (not GetWorld()->GetTimeSeconds) is used on both ends because
+	 * it's kept in sync between server and clients specifically for this kind of countdown.
+	 */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
+	float CurrentPhaseTimerEndTime = -1.f;
+
+	/** Seconds left before the current phase's timeout fires, or 0 if no timer is running. UI bind target. */
+	UFUNCTION(BlueprintPure, Category = "Shogi")
+	float GetPhaseTimerSecondsRemaining() const;
+
 	UPROPERTY(BlueprintAssignable, Category = "Shogi")
 	FOnShogiTurnChanged OnTurnChanged;
 

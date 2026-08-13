@@ -122,6 +122,14 @@ TArray<int32> UShogiRulesLibrary::GetMovableIndices(
 {
 	TArray<int32> MovableList;
 
+	// Petrify Curse card (see docs/2026-08-14-card-system-phase-b.md): a petrified piece can
+	// never move, overriding any move-granting buff (e.g. Fu Rocket) - checked first and
+	// unconditionally so nothing below can add a destination back in.
+	if (SelectedPiece.bIsPetrified)
+	{
+		return MovableList;
+	}
+
 	if (!MoveDataTable || !IsValidBoardIndex(FromIndex))
 	{
 		return MovableList;
@@ -151,6 +159,28 @@ TArray<int32> UShogiRulesLibrary::GetMovableIndices(
 		}
 
 		MovableList.Add(ToIndex);
+	}
+
+	// Fu Rocket card buff (see docs/2026-08-14-card-system-phase-a.md): grants a permanent
+	// forward+2 destination that jumps over whatever occupies forward+1, independent of the
+	// DataTable-driven move set above. Sente's forward is dY=-1 (see CheckCanMove's comment
+	// on the table's authoring perspective), so Gote's forward+2 mirrors to dY=+2.
+	if (SelectedPiece.PieceType == EPieceType::Fu && SelectedPiece.bHasFuRocketBoost)
+	{
+		int32 FromX, FromY;
+		IndexToXY(FromIndex, FromX, FromY);
+		const int32 ForwardStep = (SelectedPiece.PlayerSide == EPlayerSide::Gote) ? 2 : -2;
+		const int32 BoostY = FromY + ForwardStep;
+
+		if (BoostY >= 0 && BoostY < BoardDimension)
+		{
+			const int32 BoostIndex = XYToIndex(FromX, BoostY);
+			if (!MovableList.Contains(BoostIndex)
+				&& (!BoardArray.IsValidIndex(BoostIndex) || BoardArray[BoostIndex].PlayerSide != SelectedPiece.PlayerSide))
+			{
+				MovableList.Add(BoostIndex);
+			}
+		}
 	}
 
 	return MovableList;

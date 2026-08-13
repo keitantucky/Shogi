@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "ShogiTypes.h"
 #include "ShogiGameMode.generated.h"
 
 class AShogiPlayerController;
@@ -41,4 +42,43 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Shogi")
 	TObjectPtr<AShogiPlayerController> GotePlayer;
+
+	/**
+	 * Finds whichever connected controller currently acts for Side, used by
+	 * AShogiBoardManager::AdvanceTurn to start that side's card phase (see
+	 * docs/2026-08-14-card-system-phase-a.md). Checks each controller's actual PlayerSide/
+	 * bControlBothSides rather than trusting the SentePlayer/GotePlayer slot names, since
+	 * AShogiSinglePlayerVsAIGameMode overwrites PlayerSide to LocalHumanSide after the base
+	 * class's PostLogin already stored the controller in the SentePlayer slot - the human
+	 * could end up actually playing Gote while still sitting in the "SentePlayer" field.
+	 * Returns nullptr if nobody is currently controlling Side (e.g. the AI's side in
+	 * AShogiSinglePlayerVsAIGameMode, which moves via BoardManager directly, not a controller).
+	 */
+	UFUNCTION(BlueprintPure, Category = "Shogi")
+	AShogiPlayerController* GetControllerForSide(EPlayerSide Side) const;
+
+protected:
+	/**
+	 * Shared Sente/Gote/bControlBothSides-for-NM_Standalone assignment, factored out of
+	 * PostLogin so subclasses (AShogiSinglePlayerVsAIGameMode, AShogiSinglePlayerHotSeatGameMode)
+	 * can reuse it while still applying their own PlayerSide/bControlBothSides correction
+	 * afterward, before TryStartInitialCardPhase runs (see below).
+	 */
+	void AssignPlayerSideOnLogin(APlayerController* NewPlayer);
+
+	/**
+	 * Starts the very first turn's card phase (Sente's, at game start) - the one turn
+	 * AShogiBoardManager::AdvanceTurn never covers, since AdvanceTurn only runs after a move
+	 * completes. Idempotent (only the first call does anything) and safe to call from every
+	 * PostLogin override; each override should call this as its LAST statement, once
+	 * NewPlayer's PlayerSide/bControlBothSides are fully finalized - calling it any earlier
+	 * (e.g. via the base class's own PostLogin body while a subclass hasn't yet corrected
+	 * PlayerSide/bControlBothSides) can resolve AShogiGameMode::GetControllerForSide(Sente)
+	 * incorrectly for AShogiSinglePlayerVsAIGameMode when the human plays Gote. See
+	 * docs/2026-08-14-card-system-phase-b.md 3.7 (revised).
+	 */
+	void TryStartInitialCardPhase();
+
+private:
+	bool bInitialCardPhaseStarted = false;
 };

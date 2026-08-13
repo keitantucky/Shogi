@@ -54,4 +54,52 @@ struct SHOGI_API FShogiPieceData
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
 	bool bIsPromoted = false;
+
+	/**
+	 * Set by the "Fu Rocket" card (see docs/2026-08-14-card-system-phase-a.md). Permanent
+	 * once granted - persists through capture/drop like every other field here, since
+	 * FShogiPieceData is copied wholesale by ApplyMove's capture logic and ApplyDrop.
+	 * Only meaningful for EPieceType::Fu; UShogiRulesLibrary::GetMovableIndices adds an
+	 * extra forward+2 destination when this is set.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
+	bool bHasFuRocketBoost = false;
+
+	/**
+	 * Set by the "Petrify Curse" card (see docs/2026-08-14-card-system-phase-b.md). Permanent
+	 * once granted, persists through capture/drop like bHasFuRocketBoost.
+	 * UShogiRulesLibrary::GetMovableIndices returns an empty list whenever this is set,
+	 * checked before (and overriding) any move-granting buff such as Fu Rocket.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
+	bool bIsPetrified = false;
+
+	/**
+	 * Set by the "Temporary Invincibility" card. While true, this piece cannot be captured
+	 * (AShogiBoardManager::ApplyMove rejects the capture) and cannot be selected as the
+	 * target of any card effect (UShogiCardEffectLibrary target checks). Cleared automatically
+	 * by AShogiBoardManager::AdvanceTurn at the start of this piece's owning side's own next
+	 * turn (protects through exactly one opposing turn). See docs/2026-08-14-card-system-phase-b.md.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
+	bool bIsInvincible = false;
+
+	/**
+	 * "Rental Reservation" card state (see docs/2026-08-14-card-system-phase-b.md section 2.1).
+	 * None = no reservation in effect. Ticks up by 1 each AShogiBoardManager::AdvanceTurn call
+	 * while pending; once it reaches 2 on the caster's own turn, ownership flips to the caster
+	 * for that turn (bLoanActive=true) and reverts to LoanOriginalOwnerSide at the start of the
+	 * following turn, at which point all four fields reset to their defaults.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
+	EPlayerSide PendingLoanCasterSide = EPlayerSide::None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
+	int32 PendingLoanTurnsElapsed = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
+	bool bLoanActive = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shogi")
+	EPlayerSide LoanOriginalOwnerSide = EPlayerSide::None;
 };

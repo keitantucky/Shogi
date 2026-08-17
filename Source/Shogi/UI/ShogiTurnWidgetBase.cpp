@@ -51,3 +51,36 @@ ESlateVisibility UShogiTurnWidgetBase::GetPhaseTimerVisibility() const
 {
 	return GetPhaseTimerText().IsEmpty() ? ESlateVisibility::Hidden : ESlateVisibility::Visible;
 }
+
+FText UShogiTurnWidgetBase::GetTimeBankDisplayText(EPlayerSide Side) const
+{
+	const AShogiGameState* GS = GetWorld() ? GetWorld()->GetGameState<AShogiGameState>() : nullptr;
+	if (!GS)
+	{
+		return FText::GetEmpty();
+	}
+
+	// Matches AShogiBoardManager::CardPhaseTimeoutSeconds/MovePhaseTimeoutSeconds - purely the
+	// display default shown for a side that isn't currently ticking (see AShogiBoardManager,
+	// both are hardcoded 15.f there too rather than shared via one constant).
+	constexpr int32 DefaultFreeSeconds = 15;
+
+	const bool bIsActingSide = !GS->bGameOver && GS->CurrentTurn == Side;
+	const bool bDrawingBank = bIsActingSide && GS->bIsDrawingFromTimeBank;
+
+	const int32 BankSeconds = FMath::Max(0, FMath::CeilToInt(bDrawingBank ? GS->GetPhaseTimerSecondsRemaining() : GS->GetTimeBankSeconds(Side)));
+	const int32 FreeSeconds = bDrawingBank ? 0 : (bIsActingSide ? FMath::Max(0, FMath::CeilToInt(GS->GetPhaseTimerSecondsRemaining())) : DefaultFreeSeconds);
+
+	return FText::FromString(FString::Printf(TEXT("%d+%d"), BankSeconds, FreeSeconds));
+}
+
+ESlateVisibility UShogiTurnWidgetBase::GetTimeBankVisibility(EPlayerSide Side) const
+{
+	const AShogiGameState* GS = GetWorld() ? GetWorld()->GetGameState<AShogiGameState>() : nullptr;
+	if (!GS || GS->bGameOver)
+	{
+		return ESlateVisibility::Hidden;
+	}
+
+	return (GS->CurrentTurn == Side) ? ESlateVisibility::Visible : ESlateVisibility::Hidden;
+}

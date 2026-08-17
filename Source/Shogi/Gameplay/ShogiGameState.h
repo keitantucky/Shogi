@@ -72,6 +72,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Shogi")
 	float GetTimeBankSeconds(EPlayerSide Side) const;
 
+	/**
+	 * True while CurrentTurn's side has exceeded its current phase's free 15-second allowance
+	 * and is now drawing from its persistent time bank instead - see
+	 * AShogiBoardManager::BeginBankDepletion/EndBankDepletion. UI bind target: while false,
+	 * GetPhaseTimerSecondsRemaining() is the free-allowance countdown; while true, it IS the
+	 * live time-bank countdown for CurrentTurn's side.
+	 */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
+	bool bIsDrawingFromTimeBank = false;
+
 	UPROPERTY(BlueprintAssignable, Category = "Shogi")
 	FOnShogiTurnChanged OnTurnChanged;
 

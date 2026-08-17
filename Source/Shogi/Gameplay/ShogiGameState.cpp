@@ -49,4 +49,5 @@ void AShogiGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AShogiGameState, CurrentPhaseTimerEndTime);
 	DOREPLIFETIME(AShogiGameState, TimeBankSeconds_Sente);
 	DOREPLIFETIME(AShogiGameState, TimeBankSeconds_Gote);
+	DOREPLIFETIME(AShogiGameState, bIsDrawingFromTimeBank);
 }

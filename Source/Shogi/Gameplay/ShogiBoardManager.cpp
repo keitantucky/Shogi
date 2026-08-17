@@ -430,6 +430,7 @@ void AShogiBoardManager::StartCardPhaseForCurrentTurn()
 	GetWorldTimerManager().ClearTimer(CardPhaseTimerHandle);
 	GetWorldTimerManager().ClearTimer(MovePhaseTimerHandle);
 	BankDepletionStartTime = -1.f;
+	GS->bIsDrawingFromTimeBank = false;
 
 	if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
 	{
@@ -523,6 +524,7 @@ void AShogiBoardManager::BeginBankDepletion(FTimerHandle& PhaseTimerHandle)
 		return;
 	}
 
+	GS->bIsDrawingFromTimeBank = true;
 	SetPhaseTimerEndTime(RemainingBank);
 	GetWorldTimerManager().SetTimer(PhaseTimerHandle, this, &AShogiBoardManager::HandleTimeUp, RemainingBank, false);
 }
@@ -540,6 +542,7 @@ void AShogiBoardManager::EndBankDepletion(EPlayerSide Side)
 		const float Elapsed = GS->GetServerWorldTimeSeconds() - BankDepletionStartTime;
 		float& Bank = (Side == EPlayerSide::Sente) ? GS->TimeBankSeconds_Sente : GS->TimeBankSeconds_Gote;
 		Bank = FMath::Max(0.f, Bank - Elapsed);
+		GS->bIsDrawingFromTimeBank = false;
 	}
 	BankDepletionStartTime = -1.f;
 }
@@ -555,6 +558,7 @@ void AShogiBoardManager::HandleTimeUp()
 	float& Bank = (GS->CurrentTurn == EPlayerSide::Sente) ? GS->TimeBankSeconds_Sente : GS->TimeBankSeconds_Gote;
 	Bank = 0.f;
 	BankDepletionStartTime = -1.f;
+	GS->bIsDrawingFromTimeBank = false;
 
 	GS->bGameOver = true;
 	GS->Winner = (GS->CurrentTurn == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;

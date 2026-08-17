@@ -5,10 +5,12 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameStateBase.h"
 #include "ShogiTypes.h"
+#include "ShogiCardTypes.h"
 #include "ShogiGameState.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShogiTurnChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShogiGameOver);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnShogiCardEffectActivated, ECardType, CardType, EPlayerSide, Side, int32, TargetBoardIndex);
 
 /**
  * Native replacement for the Blueprint GameStateBase BP_ShogiGameState.
@@ -53,6 +55,23 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Shogi")
 	float GetPhaseTimerSecondsRemaining() const;
 
+	/**
+	 * Persistent per-side time bank (持ち時間): each phase (card/move) still gets its own free
+	 * 15-second allowance (CurrentPhaseTimerEndTime), but once that's exceeded, the overage is
+	 * drawn from here instead of forcing a random action - see
+	 * AShogiBoardManager::BeginBankDepletion/EndBankDepletion. Reaching 0 while still being drawn
+	 * from is a time-up loss (AShogiBoardManager::HandleTimeUp). Never replenished mid-game.
+	 */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
+	float TimeBankSeconds_Sente = 60.f;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Shogi")
+	float TimeBankSeconds_Gote = 60.f;
+
+	/** TimeBankSeconds_Sente/_Gote for Side (0 for EPlayerSide::None). UI bind target. */
+	UFUNCTION(BlueprintPure, Category = "Shogi")
+	float GetTimeBankSeconds(EPlayerSide Side) const;
+
 	UPROPERTY(BlueprintAssignable, Category = "Shogi")
 	FOnShogiTurnChanged OnTurnChanged;
 
@@ -66,6 +85,14 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Shogi")
 	FOnShogiGameOver OnGameOver;
+
+	/** Broadcast to all clients whenever a card effect is successfully applied - see AShogiBoardManager::ApplyCardEffect. */
+	UPROPERTY(BlueprintAssignable, Category = "Shogi")
+	FOnShogiCardEffectActivated OnCardEffectActivated;
+
+	/** Server-called notification for a successful card play. Just broadcasts OnCardEffectActivated on every client. */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_NotifyCardEffectActivated(ECardType CardType, EPlayerSide Side, int32 TargetBoardIndex);
 
 	UFUNCTION()
 	void OnRep_CurrentTurn();

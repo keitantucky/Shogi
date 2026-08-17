@@ -14,6 +14,7 @@ class AShogiGameState;
 class UUserWidget;
 class UShogiPromotionPromptWidgetBase;
 class UShogiCardHandWidgetBase;
+class UShogiCardEffectBannerWidgetBase;
 
 /**
  * Native replacement for the Blueprint PlayerController BP_MyPlayerController.
@@ -71,6 +72,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Shogi")
 	TSubclassOf<UShogiCardHandWidgetBase> CardHandWidgetClass;
 
+	/** Assign to a new WBP_CardEffectBanner (parented to UShogiCardEffectBannerWidgetBase) in the editor. */
+	UPROPERTY(EditAnywhere, Category = "Shogi")
+	TSubclassOf<UShogiCardEffectBannerWidgetBase> CardEffectBannerWidgetClass;
+
 	UFUNCTION(Server, Reliable)
 	void Server_RequestMovePiece(int32 From, int32 To, bool bPromote);
 
@@ -125,16 +130,6 @@ public:
 	 */
 	void RedrawHandForSide(EPlayerSide Side);
 
-	/**
-	 * 15-second card-phase timeout handler (see docs/2026-08-14-card-system-phase-b.md 3.7),
-	 * called by AShogiBoardManager::HandleCardPhaseTimeout - a plain function, not an RPC,
-	 * since it only ever runs server-side. Picks a uniformly-random playable card from
-	 * GetControllableSide()'s hand (with a random valid target if one is needed) and plays it
-	 * via the same path as Server_RequestPlayCard; if no card in hand is currently playable,
-	 * just resolves the card phase without playing anything (a forced pass).
-	 */
-	void ForceRandomCardOrPass();
-
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
@@ -147,6 +142,9 @@ protected:
 	UFUNCTION()
 	void HandleTurnChanged();
 
+	UFUNCTION()
+	void HandleCardEffectActivated(ECardType CardType, EPlayerSide Side, int32 TargetBoardIndex);
+
 	void HandleLeftClick();
 
 	UFUNCTION()
@@ -158,6 +156,9 @@ protected:
 private:
 	UPROPERTY()
 	TObjectPtr<AShogiBoardManager> BoardManager;
+
+	UPROPERTY()
+	TObjectPtr<UShogiCardEffectBannerWidgetBase> CardEffectBannerWidget;
 
 	UPROPERTY()
 	TObjectPtr<AShogiGameState> GameState;

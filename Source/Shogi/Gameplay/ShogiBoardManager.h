@@ -14,9 +14,8 @@ class USceneComponent;
 
 /**
  * One candidate move or drop, as enumerated by AShogiBoardManager::PickRandomLegalAction.
- * Shared by AShogiSinglePlayerVsAIGameMode::MakeAIMove and
- * AShogiBoardManager::HandleMovePhaseTimeout (see docs/2026-08-14-card-system-phase-b.md 3.8)
- * so both pick from the exact same "every legal move/drop for Side" pool via one function.
+ * Used by AShogiSinglePlayerVsAIGameMode::MakeAIMove to pick the CPU opponent's move from
+ * the exact same "every legal move/drop for Side" pool a human player's move markers show.
  */
 USTRUCT()
 struct FShogiLegalAction
@@ -185,19 +184,19 @@ public:
 
 	/**
 	 * Uniformly-random pick among every currently legal move/drop for Side (board moves via
-	 * GetMovableIndices, hand-piece drops onto any empty, non-nifu-violating square) - the same
-	 * pool AShogiSinglePlayerVsAIGameMode::MakeAIMove and the 15-second move-phase timeout
-	 * (see docs/2026-08-14-card-system-phase-b.md 3.7/3.8) choose from. Returns false (OutAction
-	 * left default) if Side has no legal move or drop at all.
+	 * GetMovableIndices, hand-piece drops onto any empty, non-nifu-violating square) - the pool
+	 * AShogiSinglePlayerVsAIGameMode::MakeAIMove chooses the CPU opponent's move from. Returns
+	 * false (OutAction left default) if Side has no legal move or drop at all.
 	 */
 	bool PickRandomLegalAction(EPlayerSide Side, FShogiLegalAction& OutAction) const;
 
 	/**
 	 * Called by AShogiPlayerController whenever Side's card phase becomes resolved (a card was
-	 * played, a pass was requested, or the timeout forced one of those) - see
-	 * docs/2026-08-14-card-system-phase-b.md 3.7. Clears the card-phase timeout timer and, only
-	 * if a controller actually plays Side (AShogiGameMode::GetControllerForSide), starts the
-	 * 15-second move-phase timeout. Safe to call even when nothing was running.
+	 * played or a pass was requested) - see docs/2026-08-14-card-system-phase-b.md 3.7. Deducts
+	 * any time drawn from Side's persistent bank (EndBankDepletion), clears the card-phase free-
+	 * allowance timer, and, only if a controller actually plays Side
+	 * (AShogiGameMode::GetControllerForSide), starts the move phase's 15-second free allowance.
+	 * Safe to call even when nothing was running.
 	 */
 	void OnCardPhaseResolved(EPlayerSide Side);
 
@@ -263,18 +262,48 @@ private:
 	class AShogiGameState* GetShogiGameState() const;
 	static void DebugLogTableContents(UDataTable* Table, const FString& Label);
 
-	/** See docs/2026-08-14-card-system-phase-b.md 3.7. Only ever started when a controller plays the relevant side. */
+	/**
+	 * Free per-phase allowance before a side's persistent time bank
+	 * (AShogiGameState::TimeBankSeconds_Sente/_Gote) starts being drawn from - see
+	 * BeginBankDepletion. Only ever started when a controller plays the relevant side.
+	 */
 	static constexpr float CardPhaseTimeoutSeconds = 15.f;
 	static constexpr float MovePhaseTimeoutSeconds = 15.f;
 
 	FTimerHandle CardPhaseTimerHandle;
 	FTimerHandle MovePhaseTimerHandle;
 
-	/** Fires when CardPhaseTimerHandle expires: forces CurrentTurn's controller to play a random card or pass. */
-	void HandleCardPhaseTimeout();
+	/**
+	 * GetServerWorldTimeSeconds() at which CurrentTurn's side started being drawn from its
+	 * persistent time bank (BeginBankDepletion); -1 while still within a phase's free
+	 * CardPhaseTimeoutSeconds/MovePhaseTimeoutSeconds allowance, or when no phase is active.
+	 */
+	float BankDepletionStartTime = -1.f;
 
-	/** Fires when MovePhaseTimerHandle expires: applies a uniformly-random legal move/drop for CurrentTurn. */
-	void HandleMovePhaseTimeout();
+	/** Fires when CardPhaseTimerHandle's free allowance expires without the card phase resolving. */
+	void HandleCardPhaseFreePeriodExpired();
+
+	/** Fires when MovePhaseTimerHandle's free allowance expires without a move/drop being made. */
+	void HandleMovePhaseFreePeriodExpired();
+
+	/**
+	 * Starts drawing CurrentTurn's persistent time bank: re-arms PhaseTimerHandle for however
+	 * much bank remains, pointed at HandleTimeUp, and updates CurrentPhaseTimerEndTime so the
+	 * existing phase-timer UI switches from the free-allowance countdown to the bank countdown.
+	 * If the bank is already empty, ends the game immediately instead (see HandleTimeUp).
+	 */
+	void BeginBankDepletion(FTimerHandle& PhaseTimerHandle);
+
+	/**
+	 * Called whenever a phase resolves normally (a card is played/passed, or a move/drop is
+	 * applied) for Side. If BeginBankDepletion had started drawing the bank, deducts the elapsed
+	 * time from Side's persistent bank and stops drawing. Safe to call even when the bank wasn't
+	 * being drawn (no-op).
+	 */
+	void EndBankDepletion(EPlayerSide Side);
+
+	/** Fires when CurrentTurn's persistent time bank reaches zero mid-phase: a time-up loss for that side. */
+	void HandleTimeUp();
 
 	/** Stamps AShogiGameState::CurrentPhaseTimerEndTime so clients can render a synced countdown (see docs/2026-08-14-card-system-phase-b.md 3.7, revised). */
 	void SetPhaseTimerEndTime(float DurationSeconds);

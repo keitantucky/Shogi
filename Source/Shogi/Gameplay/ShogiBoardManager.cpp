@@ -429,13 +429,14 @@ void AShogiBoardManager::StartCardPhaseForCurrentTurn()
 	// docs/2026-08-14-card-system-phase-b.md 3.7).
 	GetWorldTimerManager().ClearTimer(CardPhaseTimerHandle);
 	GetWorldTimerManager().ClearTimer(MovePhaseTimerHandle);
+	BankDepletionStartTime = -1.f;
 
 	if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
 	{
 		if (AShogiPlayerController* PC = GM->GetControllerForSide(GS->CurrentTurn))
 		{
 			PC->RedrawHandForSide(GS->CurrentTurn);
-			GetWorldTimerManager().SetTimer(CardPhaseTimerHandle, this, &AShogiBoardManager::HandleCardPhaseTimeout, CardPhaseTimeoutSeconds, false);
+			GetWorldTimerManager().SetTimer(CardPhaseTimerHandle, this, &AShogiBoardManager::HandleCardPhaseFreePeriodExpired, CardPhaseTimeoutSeconds, false);
 			SetPhaseTimerEndTime(CardPhaseTimeoutSeconds);
 			return;
 		}
@@ -451,13 +452,14 @@ void AShogiBoardManager::StartCardPhaseForCurrentTurn()
 
 void AShogiBoardManager::OnCardPhaseResolved(EPlayerSide Side)
 {
+	EndBankDepletion(Side);
 	GetWorldTimerManager().ClearTimer(CardPhaseTimerHandle);
 
 	if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
 	{
 		if (GM->GetControllerForSide(Side))
 		{
-			GetWorldTimerManager().SetTimer(MovePhaseTimerHandle, this, &AShogiBoardManager::HandleMovePhaseTimeout, MovePhaseTimeoutSeconds, false);
+			GetWorldTimerManager().SetTimer(MovePhaseTimerHandle, this, &AShogiBoardManager::HandleMovePhaseFreePeriodExpired, MovePhaseTimeoutSeconds, false);
 			SetPhaseTimerEndTime(MovePhaseTimeoutSeconds);
 			return;
 		}
@@ -482,7 +484,7 @@ void AShogiBoardManager::ClearPhaseTimerEndTime()
 	}
 }
 
-void AShogiBoardManager::HandleCardPhaseTimeout()
+void AShogiBoardManager::HandleCardPhaseFreePeriodExpired()
 {
 	AShogiGameState* GS = GetShogiGameState();
 	if (!GS || GS->bGameOver || GS->bCardPhaseResolved)
@@ -490,16 +492,10 @@ void AShogiBoardManager::HandleCardPhaseTimeout()
 		return;
 	}
 
-	if (AShogiGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AShogiGameMode>() : nullptr)
-	{
-		if (AShogiPlayerController* PC = GM->GetControllerForSide(GS->CurrentTurn))
-		{
-			PC->ForceRandomCardOrPass();
-		}
-	}
+	BeginBankDepletion(CardPhaseTimerHandle);
 }
 
-void AShogiBoardManager::HandleMovePhaseTimeout()
+void AShogiBoardManager::HandleMovePhaseFreePeriodExpired()
 {
 	AShogiGameState* GS = GetShogiGameState();
 	if (!GS || GS->bGameOver || !GS->bCardPhaseResolved)
@@ -507,21 +503,66 @@ void AShogiBoardManager::HandleMovePhaseTimeout()
 		return;
 	}
 
-	FShogiLegalAction Chosen;
-	if (!PickRandomLegalAction(GS->CurrentTurn, Chosen))
+	BeginBankDepletion(MovePhaseTimerHandle);
+}
+
+void AShogiBoardManager::BeginBankDepletion(FTimerHandle& PhaseTimerHandle)
+{
+	AShogiGameState* GS = GetShogiGameState();
+	if (!GS)
 	{
-		// Stalemate-equivalent - matches AShogiSinglePlayerVsAIGameMode::MakeAIMove's handling.
 		return;
 	}
 
-	if (Chosen.bIsDrop)
+	const float RemainingBank = GS->GetTimeBankSeconds(GS->CurrentTurn);
+	BankDepletionStartTime = GS->GetServerWorldTimeSeconds();
+
+	if (RemainingBank <= 0.f)
 	{
-		ApplyDrop(Chosen.To, Chosen.DropActor, Chosen.DropPieceType, GS->CurrentTurn);
+		HandleTimeUp();
+		return;
 	}
-	else
+
+	SetPhaseTimerEndTime(RemainingBank);
+	GetWorldTimerManager().SetTimer(PhaseTimerHandle, this, &AShogiBoardManager::HandleTimeUp, RemainingBank, false);
+}
+
+void AShogiBoardManager::EndBankDepletion(EPlayerSide Side)
+{
+	if (BankDepletionStartTime < 0.f)
 	{
-		ApplyMove(Chosen.From, Chosen.To, GS->CurrentTurn, /*bClientRequestedPromote=*/true);
+		// The phase resolved within its free allowance - the bank was never touched.
+		return;
 	}
+
+	if (AShogiGameState* GS = GetShogiGameState())
+	{
+		const float Elapsed = GS->GetServerWorldTimeSeconds() - BankDepletionStartTime;
+		float& Bank = (Side == EPlayerSide::Sente) ? GS->TimeBankSeconds_Sente : GS->TimeBankSeconds_Gote;
+		Bank = FMath::Max(0.f, Bank - Elapsed);
+	}
+	BankDepletionStartTime = -1.f;
+}
+
+void AShogiBoardManager::HandleTimeUp()
+{
+	AShogiGameState* GS = GetShogiGameState();
+	if (!GS || GS->bGameOver)
+	{
+		return;
+	}
+
+	float& Bank = (GS->CurrentTurn == EPlayerSide::Sente) ? GS->TimeBankSeconds_Sente : GS->TimeBankSeconds_Gote;
+	Bank = 0.f;
+	BankDepletionStartTime = -1.f;
+
+	GS->bGameOver = true;
+	GS->Winner = (GS->CurrentTurn == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
+	GS->OnRep_GameOver();
+
+	GetWorldTimerManager().ClearTimer(CardPhaseTimerHandle);
+	GetWorldTimerManager().ClearTimer(MovePhaseTimerHandle);
+	ClearPhaseTimerEndTime();
 }
 
 bool AShogiBoardManager::ResolveCardPhaseIfUncontrolled(AShogiGameState* GS, EPlayerSide Side)
@@ -864,6 +905,11 @@ bool AShogiBoardManager::ApplyCardEffect(ECardType CardType, EPlayerSide Request
 		GS->bInCheck = IsKingInCheck(GS->CurrentTurn);
 	}
 
+	if (bApplied)
+	{
+		GS->Multicast_NotifyCardEffectActivated(CardType, RequestingSide, TargetBoardIndex);
+	}
+
 	return bApplied;
 }
 
@@ -1104,6 +1150,7 @@ void AShogiBoardManager::ApplyMove(int32 From, int32 To, EPlayerSide RequestingS
 	}
 
 	UpdateStandLayout();
+	EndBankDepletion(RequestingSide);
 
 	if (bCapturedKing)
 	{
@@ -1192,6 +1239,7 @@ void AShogiBoardManager::ApplyDrop(int32 DropIndex, AShogiPiece* DropPieceActor,
 	DropPieceActor->UpdateAppearance();
 
 	UpdateStandLayout();
+	EndBankDepletion(RequestingSide);
 	AdvanceTurn();
 }
 

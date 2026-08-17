@@ -9,6 +9,7 @@
 
 class UStaticMeshComponent;
 class UStaticMesh;
+class UWidgetComponent;
 
 /**
  * Native replacement for the Blueprint Actor BP_Piece.
@@ -36,6 +37,14 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Shogi")
 	TObjectPtr<UStaticMeshComponent> PieceMesh;
 
+	/**
+	 * Screen-space status-icon widget (石化/無敵/歩兵ロケット強化/貸出中 etc. - see
+	 * UShogiPieceStatusWidgetBase), hovering above the piece. Purely local/visual, so it needs
+	 * no replication - each client's own AShogiPiece instance reads PieceData directly.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Shogi")
+	TObjectPtr<UWidgetComponent> StatusWidgetComponent;
+
 	/** Sets PieceMesh/rotation to match PieceData. Called after PieceData changes locally or via replication. */
 	UFUNCTION(BlueprintCallable, Category = "Shogi")
 	void UpdateAppearance();
@@ -47,6 +56,8 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
+	virtual void BeginPlay() override;
+
 	UFUNCTION()
 	void OnRep_PieceData();
 

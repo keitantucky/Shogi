@@ -154,14 +154,20 @@ protected:
 	void OnRep_CardState_Gote();
 
 private:
+	// mutable: GetOrFindBoardManager/GetOrFindGameState lazily populate these on first
+	// successful lookup and are called from const contexts too (e.g. IsCardPlayable) -
+	// without retrying via the lazy getter, a lookup that raced ahead of AShogiBoardManager's
+	// replication to a remote client (BeginPlay's initial GetOrFindBoardManager() call) would
+	// leave BoardManager permanently null for that client, silently breaking every subsequent
+	// IsCardPlayable check (and therefore every card button) for the rest of the match.
 	UPROPERTY()
-	TObjectPtr<AShogiBoardManager> BoardManager;
+	mutable TObjectPtr<AShogiBoardManager> BoardManager;
 
 	UPROPERTY()
 	TObjectPtr<UShogiCardEffectBannerWidgetBase> CardEffectBannerWidget;
 
 	UPROPERTY()
-	TObjectPtr<AShogiGameState> GameState;
+	mutable TObjectPtr<AShogiGameState> GameState;
 
 	int32 SelectedPieceIndex = INDEX_NONE;
 	EPieceType SelectedPieceType = EPieceType::None;
@@ -200,8 +206,8 @@ private:
 	int32 PendingMoveFrom = INDEX_NONE;
 	int32 PendingMoveTo = INDEX_NONE;
 
-	AShogiBoardManager* GetOrFindBoardManager();
-	AShogiGameState* GetOrFindGameState();
+	AShogiBoardManager* GetOrFindBoardManager() const;
+	AShogiGameState* GetOrFindGameState() const;
 	bool TryComputeClickedBoardIndex(int32& OutIndex) const;
 	void ClearSelection();
 	void TrySelectAt(int32 Index);

@@ -100,7 +100,7 @@ void AShogiPlayerController::SetupInputComponent()
 	}
 }
 
-AShogiBoardManager* AShogiPlayerController::GetOrFindBoardManager()
+AShogiBoardManager* AShogiPlayerController::GetOrFindBoardManager() const
 {
 	if (!BoardManager)
 	{
@@ -109,7 +109,7 @@ AShogiBoardManager* AShogiPlayerController::GetOrFindBoardManager()
 	return BoardManager;
 }
 
-AShogiGameState* AShogiPlayerController::GetOrFindGameState()
+AShogiGameState* AShogiPlayerController::GetOrFindGameState() const
 {
 	if (!GameState)
 	{
@@ -467,7 +467,8 @@ const TArray<ECardType>& AShogiPlayerController::GetMyHand() const
 
 bool AShogiPlayerController::IsCardPlayable(ECardType CardType) const
 {
-	if (!GameState || GameState->bGameOver || GameState->CurrentTurn != GetControllableSide() || GameState->bCardPhaseResolved)
+	AShogiGameState* GS = GetOrFindGameState();
+	if (!GS || GS->bGameOver || GS->CurrentTurn != GetControllableSide() || GS->bCardPhaseResolved)
 	{
 		return false;
 	}
@@ -477,16 +478,21 @@ bool AShogiPlayerController::IsCardPlayable(ECardType CardType) const
 		return false;
 	}
 
-	if (!BoardManager)
+	// Uses the lazy GetOrFindBoardManager() (not the raw BoardManager member) so that if the
+	// initial BeginPlay lookup raced ahead of AShogiBoardManager's replication to this client
+	// (only reproduces over real network latency, not same-machine PIE), every subsequent card
+	// button press keeps retrying instead of staying permanently stuck on a stale null.
+	AShogiBoardManager* BM = GetOrFindBoardManager();
+	if (!BM)
 	{
 		return false;
 	}
 
 	const EPlayerSide OpponentSide = (GetControllableSide() == EPlayerSide::Sente) ? EPlayerSide::Gote : EPlayerSide::Sente;
 	const TArray<FShogiPieceData>& OpponentCaptured =
-		(OpponentSide == EPlayerSide::Sente) ? BoardManager->CapturedPieces_Sente : BoardManager->CapturedPieces_Gote;
+		(OpponentSide == EPlayerSide::Sente) ? BM->CapturedPieces_Sente : BM->CapturedPieces_Gote;
 
-	return UShogiCardEffectLibrary::HasValidTarget(CardType, BoardManager->BoardArray, OpponentCaptured, GetControllableSide());
+	return UShogiCardEffectLibrary::HasValidTarget(CardType, BM->BoardArray, OpponentCaptured, GetControllableSide());
 }
 
 void AShogiPlayerController::SelectCardToPlay(ECardType CardType)
